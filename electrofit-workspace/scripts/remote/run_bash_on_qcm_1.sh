@@ -16,7 +16,7 @@ echo "Bash Script: $BASH_SCRIPT"
 
 # ------------ ---------------- ------------- -----------
 # Remote machine details
-REMOTE_HOST="qcm04"
+REMOTE_HOST="qcm06"
 echo "Remote Host: $REMOTE_HOST"
 # ------------ ---------------- ------------- -----------
 

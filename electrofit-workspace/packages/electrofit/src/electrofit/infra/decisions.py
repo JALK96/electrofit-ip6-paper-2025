@@ -95,7 +95,7 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
     notes: list[str] = []
     warnings: list[str] = []
     if protocol == 'bcc':
-        charges_origin = 'bcc'
+        charges_origin = 'AM1-BCC'
         # Symmetry ignored in bcc path
         if adjust_sym or ignore_sym:
             warnings.append('symmetry flags ignored (protocol=bcc initial path)')
@@ -111,7 +111,7 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
         else:
             symmetry_effective = 'applied (antechamber defined)'
     else:
-        charges_origin = 'bcc'  # Conservative fallback
+        charges_origin = 'AM1-BCC'  # Conservative fallback
         warnings.append(f'unknown protocol={protocol} -> treating as bcc path')
         symmetry_effective = 'applied (antechamber defined)'
     return DecisionModel(

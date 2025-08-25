@@ -14,9 +14,9 @@ run_step() {
     echo "------------------------------------"
 }
 
-#run_step electrofit step0 --project "$PROJECT" --molecule "$MOLECULE_NAME"
-#run_step electrofit step1 --project "$PROJECT" --molecule "$MOLECULE_NAME"
-#run_step electrofit step2 --project "$PROJECT" --molecule "$MOLECULE_NAME"
+run_step electrofit step0 --project "$PROJECT" --molecule "$MOLECULE_NAME"
+run_step electrofit step1 --project "$PROJECT" --molecule "$MOLECULE_NAME"
+run_step electrofit step2 --project "$PROJECT" --molecule "$MOLECULE_NAME"
 run_step electrofit step3 --project "$PROJECT" --molecule "$MOLECULE_NAME"
 run_step electrofit step4 --project "$PROJECT" --sample 2 --molecule "$MOLECULE_NAME"
 run_step env ELECTROFIT_DEBUG_GAUSSIAN_CACHE="$CACHE" electrofit step5 --project "$PROJECT" --molecule "$MOLECULE_NAME"
