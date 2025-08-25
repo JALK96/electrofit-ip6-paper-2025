@@ -12,7 +12,7 @@ dependencies:
   # ---- MD/chem stack ----
   - ambertools>=23,<25
   - openbabel>=3.1
-  #- gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
+  - gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
   - mdtraj
   - mdanalysis
   - rdkit
@@ -28,8 +28,8 @@ dependencies:
   - acpype
 
   # Toolchain bits (helps with C++ ABI on some systems); only for Linux, remove for MacOS
-  #- libstdcxx-ng
-  #- libgcc-ng
+  - libstdcxx-ng
+  - libgcc-ng
 
   # ---- Dev & test ----
   - pytest
