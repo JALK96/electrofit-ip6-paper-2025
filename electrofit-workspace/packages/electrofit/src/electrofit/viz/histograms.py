@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+import logging
 
 import numpy as np
 import matplotlib.pyplot as plt  # Hard dependency – removal of .skip sentinel logic
@@ -90,6 +91,7 @@ def plot_atom_histograms(
     ncols : int
         Maximum columns per row (layout adapts automatically).
     """
+    logging.disable(logging.CRITICAL)
     if not specs:
         return
     if not specs:
@@ -149,3 +151,4 @@ def plot_atom_histograms(
     Path(outfile).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(outfile)
     plt.close(fig)
+    logging.disable(logging.NOTSET)

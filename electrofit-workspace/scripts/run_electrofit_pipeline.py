@@ -307,7 +307,7 @@ def run_step3(project: Path, config: Path | None = None, molecule: str | None = 
         )
         cfg_run = load_config(project, context_dir=run_dir, molecule_name=mol)
         try:
-            dump_config(cfg_run, log_fn=logging.info)
+            dump_config(cfg_run, log_fn=logging.debug)
         except Exception:
             logging.debug("[step3] dump per-run config failed", exc_info=True)
 

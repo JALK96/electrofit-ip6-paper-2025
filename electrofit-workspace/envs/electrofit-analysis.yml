@@ -2,7 +2,7 @@
 name: electrofit-analysis
 channels:
   - conda-forge
-  - bioconda   # (only needed if you actually use bioconda packages)
+  - bioconda
 
 dependencies:
   # ---- Core runtime ----

@@ -29,7 +29,7 @@ class DecisionModel:
             ("stage", self.stage),
             ("protocol", str(self.protocol)),
             ("charges_origin", self.charges_origin),
-            ("symmetry.requested", str(self.symmetry_requested)),
+            ("symmetry.adjustment.requested", str(self.symmetry_requested)),
             ("symmetry.ignore_flag", str(self.symmetry_ignore_flag)),
             ("symmetry.effective", self.symmetry_effective),
             ("ensemble_mode", str(self.ensemble_mode)),
@@ -52,7 +52,7 @@ class DecisionModel:
                     ('ensemble_mode', self.ensemble_mode),
                 ]
                 sym_section = [
-                    ('symmetry.requested', self.symmetry_requested),
+                    ('symmetry.adjustment.requested', self.symmetry_requested),
                     ('symmetry.ignore_flag', self.symmetry_ignore_flag),
                     ('symmetry.effective', self.symmetry_effective),
                 ]

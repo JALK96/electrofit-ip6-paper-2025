@@ -14,6 +14,7 @@ run_step() {
     echo "------------------------------------"
 }
 
+export ELECTROFIT_LOG_LEVEL=DEBUG
 run_step electrofit step0 --project "$PROJECT" --molecule "$MOLECULE_NAME"
 run_step electrofit step1 --project "$PROJECT" --molecule "$MOLECULE_NAME"
 run_step electrofit step2 --project "$PROJECT" --molecule "$MOLECULE_NAME"

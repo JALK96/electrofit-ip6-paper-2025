@@ -226,6 +226,19 @@ def process_conformer(cfg: ConformerConfig, scratch_dir: str, original_dir: str,
             reason="defer-finalize",
         )
     logging.info("Conformer processing completed for %s", cfg.molecule_name)
+    # Log measured wall-clock times collected from adapters so they appear in process logs
+    try:
+        gtime = gaussian_result.wall_time_s if hasattr(gaussian_result, 'wall_time_s') else None
+        rtime = resp_result.wall_time_s if hasattr(resp_result, 'wall_time_s') else None
+        if gtime is not None or rtime is not None:
+            logging.info(
+                "[timing] gaussian=%s s resp=%s s",
+                f"{gtime:.3f}" if gtime is not None else "-",
+                f"{rtime:.3f}" if rtime is not None else "-",
+            )
+    except Exception:
+        logging.debug("[timing] failed to log wall times", exc_info=True)
+
     return ConformerChargeResult(
         gaussian=gaussian_result,
         resp=resp_result,

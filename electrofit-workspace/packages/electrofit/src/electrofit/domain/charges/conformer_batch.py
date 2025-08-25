@@ -177,7 +177,7 @@ def process_conformer_dir(
         if not snap_path:
             logging.warning(f"[step5][warn] snapshot could not be created in {conf_dir}")
         cfg = load_config(project_root, context_dir=conf_dir)
-        dump_config(cfg, header=True, log_fn=logging.info)
+        dump_config(cfg, header=True, log_fn=logging.debug)
         proj = cfg.project
         molecule_name = proj.molecule_name or strip_extension(pdb_file)
         if mock:

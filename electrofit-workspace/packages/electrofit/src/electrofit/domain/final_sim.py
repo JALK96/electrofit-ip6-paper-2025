@@ -51,7 +51,7 @@ def prepare_final_sim_directory(
     )
     cfg = load_config(project_root, context_dir=dest_dir, molecule_name=mol_dir.name)
     try:
-        dump_config(cfg, log_fn=logging.info)
+        dump_config(cfg, log_fn=logging.debug)
     except Exception:  # pragma: no cover
         logging.debug("[step7] config dump failed", exc_info=True)
     file_patterns = ["*GMX.gro", "*GMX.itp", "*GMX.top", "posre_*.itp"]
@@ -107,7 +107,7 @@ def launch_final_sim_run(
         extra_override=override_cfg,
     )
     cfg = load_config(project_root, context_dir=run_dir, molecule_name=mol)
-    dump_config(cfg, log_fn=logging.info)
+    dump_config(cfg, log_fn=logging.debug)
     gro = next((f.name for f in run_dir.iterdir() if f.suffix == ".gro"), None)
     if not gro:
         logging.info(f"[step8][skip] {run_dir}: no .gro file")

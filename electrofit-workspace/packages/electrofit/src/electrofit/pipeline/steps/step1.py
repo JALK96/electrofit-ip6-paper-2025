@@ -77,7 +77,7 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
         run_dir_abs = os.getcwd()
         run_cfg_path = os.path.join(run_dir_abs, "electrofit.toml")
         cfg = load_config(project_root, config_path=run_cfg_path if os.path.isfile(run_cfg_path) else None)
-        dump_config(cfg, log_fn=logging.info)
+        dump_config(cfg, log_fn=logging.debug)
         base_scratch_dir = (
             getattr(cfg.paths, "base_scratch_dir", None)
             or os.environ.get("ELECTROFIT_SCRATCH_DIR")

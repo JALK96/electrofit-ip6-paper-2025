@@ -37,6 +37,7 @@ def run_step7(project: Path, override_cfg: Path | None, only_molecule: str | Non
         try:
             reset_logging()
             setup_logging(str(log_path), also_console=False)
+            log_run_header("step8")
         except Exception:  # pragma: no cover
             pass
         ok, msg = prepare_final_sim_directory(mol_dir, project, override_cfg, multi_mol)

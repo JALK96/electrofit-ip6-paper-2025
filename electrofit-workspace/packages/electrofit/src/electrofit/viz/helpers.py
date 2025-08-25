@@ -10,6 +10,7 @@ import re
 import logging
 import matplotlib.pyplot as plt  # Hard dependency: removed lazy/skip logic
 import numpy as np
+import logging
 
 from .curly_brace import draw_curly_brace
 
@@ -46,6 +47,7 @@ def plot_charges_by_atom(atoms_dict1, initial_charges_dict, base_dir, atoms_dict
 
     Fällt der Matplotlib Import, werden nur Durchschnittsladungen persistiert.
     """
+    logging.disable(logging.CRITICAL)
     # Hard import already executed at module import; if unavailable this function will not run.
     atom_names = list(atoms_dict1.keys())
     charges_data1 = [atoms_dict1[atom]["charges"] for atom in atom_names]
@@ -224,6 +226,7 @@ def plot_charges_by_atom(atoms_dict1, initial_charges_dict, base_dir, atoms_dict
         else "average_charges_comparison.chg"
     )
     _write_avg_charges(base_dir, charges_name, avg_charges1, avg_charges2)
+    logging.disable(logging.NOTSET)
 
 # Note: This plot only works for IP6 Configs
 def plot_charges_by_atom_sym(
@@ -245,7 +248,7 @@ def plot_charges_by_atom_sym(
     - atoms_dict2: (Optional) Dictionary of atoms and their charges (second dataset for comparison).
     - equivalent_groups: (Optional) Dictionary of symmetric atom groups.
     """
-
+    logging.disable(logging.CRITICAL)
     atom_names = list(atoms_dict1.keys())
     charges_data1 = [atoms_dict1[atom]["charges"] for atom in atom_names]
     avg_charges1 = [atoms_dict1[atom]["average_charge"] for atom in atom_names]
@@ -597,7 +600,7 @@ def plot_charges_by_atom_sym(
         else "average_charges_comparison.chg"
     )
     _write_avg_charges(base_dir, charges_name, avg_charges1, avg_charges2_symmetric)
-
+    logging.disable(logging.NOTSET)
 
 def create_atom_color_mapping(atom_names, symmetry_groups):
     # List of colors to use for the groups
@@ -655,6 +658,7 @@ def plot_charges_by_symmetry(
     - symmetry_groups: Dictionary mapping representative atoms to lists of equivalent atoms.
     - atoms_dict2: (Optional) Dictionary of atoms and their charges (second dataset for comparison).
     """
+    logging.disable(logging.CRITICAL)
     atom_names = list(atoms_dict1.keys())
     charges_data1 = [atoms_dict1[atom]["charges"] for atom in atom_names]
     avg_charges1 = [atoms_dict1[atom]["average_charge"] for atom in atom_names]
@@ -869,3 +873,4 @@ def plot_charges_by_symmetry(
         else "average_charges_comparison.chg"
     )
     _write_avg_charges(base_dir, charges_name, avg_charges1, avg_charges2)
+    logging.disable(logging.NOTSET)

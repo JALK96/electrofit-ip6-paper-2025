@@ -127,14 +127,6 @@ def process_molecule_average_charges(
 
     try:
         symmetry_json_found = (extracted / 'equiv_groups.json').is_file() or any((mol_dir / 'run_gau_create_gmx_in').glob('*.json'))
-        build_aggregation_decision(
-            protocol=protocol,
-            adjust_sym=adjust_sym,
-            ignore_sym=ignore_sym,
-            calc_group_average=calc_group_average,
-            group_average_applied=False,
-            symmetry_json_found=symmetry_json_found,
-        ).log('step6')
         log_relevant_config('step6', proj, ['molecule_name','protocol','adjust_symmetry','ignore_symmetry','calculate_group_average'])
     except Exception:  # pragma: no cover
         logging.debug('[step6][decisions] logging failed', exc_info=True)
@@ -473,12 +465,21 @@ def process_molecule_average_charges(
                 cand = list((mol_dir / 'run_gau_create_gmx_in').glob('*.json'))
                 if cand:
                     sym_json = cand[0]
-            if sym_json.is_file() and not ignore_sym:
-                updated = calculate_symmetric_group_averages(results_dir / "cleaned_adjusted_charges.json", sym_json)
-                (results_dir / "cleaned_adjusted_group_average_charges_dict.json").write_text(json.dumps(updated, indent=2))
+
+            # <-- decide if we can *apply* group-average in this combined path
+            can_apply_group_avg = sym_json.is_file() and not ignore_sym
+            symmetry_json_found = sym_json.is_file()  # keep this consistent with earlier usage
+
+            if can_apply_group_avg:
+                updated = calculate_symmetric_group_averages(
+                    results_dir / "cleaned_adjusted_charges.json", sym_json
+                )
+                (results_dir / "cleaned_adjusted_group_average_charges_dict.json"
+                ).write_text(json.dumps(updated, indent=2))
                 lines = [f"{rec['average_charge']:.4f}" for rec in updated.values()]
                 cleaned_group_chg = results_dir / "cleaned_adjusted_group_average_charges.chg"
                 cleaned_group_chg.write_text("\n".join(lines) + "\n")
+
                 # Update MOL2 + run acpype immediately for this combined path
                 try:
                     updated_mol2_out = results_dir / f"averaged_{molecule_name}_cleaned.mol2"
@@ -487,6 +488,20 @@ def process_molecule_average_charges(
                     executed_acpype = True
                 except Exception:  # pragma: no cover
                     logging.debug("[step6][outlier+group] mol2/acpype failed", exc_info=True)
+
+                # >>> NEW: emit decision log that records the *applied* state for the remove outlier path
+                try:
+                    build_aggregation_decision(
+                        protocol=protocol,
+                        adjust_sym=adjust_sym,
+                        ignore_sym=ignore_sym,
+                        calc_group_average=calc_group_average,
+                        group_average_applied=True,              # <— mark as applied
+                        symmetry_json_found=symmetry_json_found,
+                    ).log('step6')
+                except Exception:  # pragma: no cover
+                    logging.debug('[step6][decisions] outlier+group applied logging failed', exc_info=True)
+
                 if plot_histograms:
                     try:
                         specs_clean_adj = [
@@ -510,6 +525,7 @@ def process_molecule_average_charges(
                     except Exception as e:  # pragma: no cover
                         logging.debug(f"[step6][hist] cleaned adjusted failed: {e}")
                         _mark("adjusted", False, True, None, f"error: {e}")
+
                     if hist_combine_groups:
                         try:
                             equiv_group = load_symmetry_groups(str(sym_json))
@@ -521,7 +537,8 @@ def process_molecule_average_charges(
                                 for a in atoms_all:
                                     combined_before.extend(atoms_dict.get(a, {}).get("charges", []))
                                     combined_after.extend(cleaned_dict.get(a, {}).get("charges", []))
-                                mean_line = updated.get(rep, {}).get("average_charge") if isinstance(updated.get(rep, {}), dict) else None
+                                mean_line = updated.get(rep, {}).get("average_charge") \
+                                    if isinstance(updated.get(rep, {}), dict) else None
                                 group_specs.append(
                                     HistogramSpec(
                                         column=f"Group:{rep}",
@@ -545,6 +562,22 @@ def process_molecule_average_charges(
                         except Exception as e:  # pragma: no cover
                             logging.debug(f"[step6][hist] cleaned group combined failed: {e}")
                             _mark("group_combined", False, True, None, f"error: {e}")
+
+            else:
+                # We are in the outlier+group path, but can't apply (missing JSON or ignore_sym=True)
+                # Optional: log that it was still requested but not applied.
+                try:
+                    build_aggregation_decision(
+                        protocol=protocol,
+                        adjust_sym=adjust_sym,
+                        ignore_sym=ignore_sym,
+                        calc_group_average=calc_group_average,
+                        group_average_applied=False,             # <— remains not applied
+                        symmetry_json_found=symmetry_json_found,
+                    ).log('step6')
+                except Exception:
+                    logging.debug('[step6][decisions] outlier+group not-applied logging failed', exc_info=True)
+
         except Exception as e:  # pragma: no cover
             logging.debug(f"[step6][outlier+group] failed: {e}")
             if plot_histograms:

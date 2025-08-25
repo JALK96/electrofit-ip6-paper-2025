@@ -65,7 +65,7 @@ def _extract_for_molecule(
         try:
             cfg_existing = load_config(project_root, context_dir=extracted_conforms_dir, molecule_name=mol_proc_dir.name)
             logging.info(f"[config] existing extracted_conforms snapshot for {mol_proc_dir.name} detected -> dump below")
-            dump_config(cfg_existing, log_fn=logging.info)
+            dump_config(cfg_existing, log_fn=logging.debug)
         except Exception:
             logging.debug("[step4] existing snapshot dump failed", exc_info=True)
 
@@ -104,15 +104,22 @@ def _extract_for_molecule(
 
     logging.info(f"Step4: start extraction for molecule_dir={mol_proc_dir.name} method={method} sample={sample}")
     try:
-        dump_config(cfg, log_fn=logging.info)
+        dump_config(cfg, log_fn=logging.debug)
     except Exception:
         logging.debug("[step4] dump per-molecule config failed", exc_info=True)
 
     raw_traj = md.load(str(traj_path), top=str(gro_path))
     try:
+        # mdtraj's residue.atoms can be an iterator; calling len() on it fails.
+        # Count safely without materializing the full list.
         res_counts: dict[str, int] = {}
         for res in raw_traj.topology.residues:
-            res_counts[res.name] = res_counts.get(res.name, 0) + len(res.atoms)
+            try:
+                count = sum(1 for _ in res.atoms)
+            except Exception:
+                # Fallback: if the residue provides a direct attribute for atom count
+                count = getattr(res, 'n_atoms', 0) or getattr(res, 'atom_count', 0)
+            res_counts[res.name] = res_counts.get(res.name, 0) + count
         inv_str = ", ".join(f"{k}:{v}" for k, v in sorted(res_counts.items()))
         logging.info(f"[step4][{mol_proc_dir.name}] residue inventory -> {inv_str}")
     except Exception:
