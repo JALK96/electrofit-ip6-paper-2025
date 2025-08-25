@@ -12,7 +12,6 @@ build/
 
 # Test dummy data (exclude large or generated fixtures)
 tests/dummy_data/
-examples/methane
 examples/methane-opt
 
 # Ignore any process directory anywhere in the repo

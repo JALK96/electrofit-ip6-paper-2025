@@ -36,4 +36,6 @@ htmlcov/
 **/*.edr
 **/*.cpt
 
+**/step.log
+
 **/process/

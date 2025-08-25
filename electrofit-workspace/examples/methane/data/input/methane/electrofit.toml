@@ -1,0 +1,37 @@
+# electrofit.toml — v0.2
+
+[project]
+name               = "methane"
+molecule_name      = "methane"   # must match the MOL2 filename stem
+residue_name       = "CH4"         # 3–4 char residue code
+charge             = 0
+protocol           = "bcc"         # "bcc" or "opt"
+adjust_symmetry    = false
+ignore_symmetry    = false
+calculate_group_average = false
+
+# Atom typing 
+atom_type          = "gaff2"       # gaff2 | gaff | amber
+
+# FF family used in generated GMX topology/includes
+[simulation]
+forcefield         = "amber94.ff" # folder name that contains forcefield.itp, tip3p.itp, ions.itp
+
+
+[paths]
+mdp_dir            = "data/MDP"    # contains em_steep.mdp, NVT.mdp, NPT.mdp, Production.mdp
+base_scratch_dir   = "/scratch/${USER}/electrofit"
+
+
+[simulation.box]
+type    = "dodecahedron"           # e.g. dodecahedron, cubic, triclinic
+edge_nm = 1.2                      # distance from solute to box edge (nm)
+
+[simulation.ions]
+cation        = "NA"
+anion         = "CL"
+concentration = 0.15               # mol/L
+
+[gromacs.runtime]
+threads = 6
+pin     = true                     # use: -pin on
