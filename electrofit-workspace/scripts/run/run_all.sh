@@ -1,7 +1,7 @@
 #!/bin/bash
 
-PROJECT="/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration"
-CACHE="/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration/cache"
+PROJECT="/Users/arthurlaux/Pythonprogramms/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration"
+CACHE="/Users/arthurlaux/Pythonprogramms/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration/cache"
 
 run_step() {
     echo ">>> Running: $*"

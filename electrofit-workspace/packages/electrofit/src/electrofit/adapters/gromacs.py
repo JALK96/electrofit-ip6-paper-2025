@@ -101,38 +101,41 @@ def set_up_production(
 			cwd=scratch_dir,
 		)
 		run_command(f"tail {m_gro_name}.top", cwd=scratch_dir)
+
+		# -------- Decide thread flags ONCE and reuse for all mdrun calls --------
+		try:
+			import psutil
+			logical_cpus = psutil.cpu_count(logical=True) or (os.cpu_count() or 1)
+		except Exception:
+			logical_cpus = os.cpu_count() or 1
+
+		if threads is not None and threads > logical_cpus:
+			logging.warning("Requested threads=%d exceeds logical CPUs=%d -> clamping",
+							threads, logical_cpus)
+			threads = logical_cpus
+
+		def _mdrun_flags() -> str:
+			flags = []
+			if threads is not None:
+				flags += ["-nt", str(threads)]
+				# For tiny systems, forcing single rank avoids DD issues on some builds
+				if threads == 1:
+					flags += ["-ntmpi", "1"]
+			if pin is not None:
+				flags += ["-pin", "on" if pin else "off"]
+			flags.append("-nobackup")
+			return " ".join(flags)
+
 		run_command(
 			f"gmx grompp -f {mdp_dirname}/em_steep.mdp -c {m_gro_name}_tip3p_ions.gro -p {m_gro_name}.top -o em_steep.tpr",
 			cwd=scratch_dir,
 		)
-		run_command("gmx mdrun -deffnm em_steep -nobackup", cwd=scratch_dir)
+		run_command(f"gmx mdrun -deffnm em_steep {_mdrun_flags()}", cwd=scratch_dir)
 		run_command(
 			'echo "Potential\n0\n" | gmx energy -f em_steep.edr -o potential.xvg -xvg none',
 			cwd=scratch_dir,
 		)
 		plot_svg("potential.xvg")
-
-		# Clamp thread count to available logical CPUs to reduce instability / segfault risk.
-		try:
-			import psutil  # optional dependency; if absent skip
-		except ImportError:
-			logical_cpus = os.cpu_count() or 1
-		else:
-			logical_cpus = psutil.cpu_count(logical=True) or (os.cpu_count() or 1)
-		if threads is not None and threads > logical_cpus:
-			logging.warning(
-				"Requested threads=%d exceeds logical CPUs=%d -> clamping", threads, logical_cpus
-			)
-			threads = logical_cpus
-
-		def _mdrun_flags():
-			flags: list[str] = []
-			if threads is not None:
-				flags += ["-nt", str(threads)]
-			if pin is not None:
-				flags += ["-pin", "on" if pin else "off"]
-			flags.append("-nobackup")
-			return " ".join(flags)
 
 		run_command(
 			f"gmx grompp -f {mdp_dirname}/NVT.mdp -c em_steep.gro -r em_steep.gro -p {m_gro_name}.top -o nvt.tpr -nobackup",

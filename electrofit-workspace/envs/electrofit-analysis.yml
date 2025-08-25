@@ -12,7 +12,7 @@ dependencies:
   # ---- MD/chem stack ----
   - ambertools>=23,<25
   - openbabel>=3.1
-  - gromacs=2022.4
+  #- gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
   - mdtraj
   - mdanalysis
   - rdkit
@@ -27,9 +27,9 @@ dependencies:
   - networkx
   - acpype
 
-  # Toolchain bits (helps with C++ ABI on some systems)
-  - libstdcxx-ng
-  - libgcc-ng
+  # Toolchain bits (helps with C++ ABI on some systems); only for Linux, remove for MacOS
+  #- libstdcxx-ng
+  #- libgcc-ng
 
   # ---- Dev & test ----
   - pytest
@@ -41,6 +41,6 @@ dependencies:
 
   # ---- Local packages (editable installs) ----
   - pip:
-      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/electrofit
+      - -e ./packages/electrofit
       # Renamed distribution: ip6-analysis (path unchanged)
-      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/ip6-analysis
+      - -e ./packages/ip6-analysis

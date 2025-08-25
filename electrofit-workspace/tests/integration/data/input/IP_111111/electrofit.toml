@@ -15,11 +15,11 @@ atom_type          = "gaff2"       # gaff2 | gaff | amber
 
 [paths]
 mdp_dir            = "data/MDP"    # contains em_steep.mdp, NVT.mdp, NPT.mdp, Production.mdp
-base_scratch_dir   = "/scratch/${USER}/electrofit"
+base_scratch_dir = "/tmp/electrofit_scratch"
 
 # FF family used in generated GMX topology/includes
 [simulation]
-forcefield         = "amber14sb.ff" # folder name that contains forcefield.itp, tip3p.itp, ions.itp
+forcefield         = "amber94.ff" # folder name that contains forcefield.itp, tip3p.itp, ions.itp
 
 [simulation.box]
 type    = "dodecahedron"           # e.g. dodecahedron, cubic, triclinic

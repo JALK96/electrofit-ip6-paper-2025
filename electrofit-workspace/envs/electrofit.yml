@@ -10,15 +10,15 @@ dependencies:
 
   # ---- MD/chem stack ----
   - ambertools>=23,<25
-  - gromacs=2022.4
+  - gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
   - openbabel>=3.1
   - mdtraj
   - numpy
   - pandas
   - matplotlib
   - acpype
-
-  # Toolchain/ABI helpers (prevents libstdc++ issues)
+  
+# Toolchain bits (helps with C++ ABI on some systems); only for Linux, remove for MacOS
   - libstdcxx-ng
   - libgcc-ng
 
@@ -32,4 +32,4 @@ dependencies:
 
   # ---- Local package(s) in editable mode ----
   - pip:
-      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/electrofit
+      - -e ./packages/electrofit

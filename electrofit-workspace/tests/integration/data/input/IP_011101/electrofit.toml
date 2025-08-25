@@ -20,7 +20,7 @@ forcefield         = "amber94.ff" # folder name that contains forcefield.itp, ti
 
 [paths]
 mdp_dir            = "data/MDP"    # contains em_steep.mdp, NVT.mdp, NPT.mdp, Production.mdp
-base_scratch_dir   = "/scratch/${USER}/electrofit"
+base_scratch_dir = "/tmp/electrofit_scratch"
 
 
 [simulation.box]
