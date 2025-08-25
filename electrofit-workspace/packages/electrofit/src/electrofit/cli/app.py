@@ -54,8 +54,8 @@ def main():
         'step4': 'Conformer extraction: sample frames from trajectories into extracted_conforms/ (linear|random|maxmin strategies).',
         'step5': 'Conformer charge pipeline: Gaussian/RESP per conformer (parallelisable) producing ensemble RESP charges.',
         'step6': 'Charge aggregation: compute ensemble averages, optional symmetry/group averaging, update MOL2 & acpype (experimental --remove-outlier).',
-        'step7': 'Placeholder / downstream analysis stage (reserved – implementation pending).',
-        'step8': 'Placeholder / export or reporting stage (reserved – implementation pending).',
+        'step7': 'Simulation setup: create run_final_gmx_simulation folders, stage GMX topology + MDP templates.',
+        'step8': 'Production MD (GROMACS): build box, solvate, ions, EM/NVT/NPT, production trajectory per molecule, using parameterized charges (from step6 - charge aggregation).',
     }
     def add_cmd(name: str):
         sp = sub.add_parser(name, help=DESCRIPTIONS.get(name,''), description=DESCRIPTIONS.get(name,''))
