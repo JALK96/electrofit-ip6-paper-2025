@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ip6-analysis"
+version = "0.1.0"
+description = "Electrofit Analysis workflows"
+requires-python = ">=3.12,<3.13"
+
+# Keep runtime dependencies empty so pip doesn't try to install things Conda already manages.
+dependencies = []
+
+# Optional: allows users outside the Conda env (see envs/) to install everything via pip with `.[full]`
+[project.optional-dependencies]
+full = [
+  "MDAnalysis",
+  "alchemlyb",
+  "joblib",
+  "matplotlib",
+  "numpy",
+  "pandas",
+  "rdkit-pypi",         # note: rdkit wheels are limited; prefer conda in practice
+  "scikit-learn",
+  "scipy",
+  "seaborn",
+  "typer",
+]
+
+[project.scripts]
+# New preferred CLI name
+ip6-analysis = "electrofit_analysis.cli.app:main"
+# Legacy alias to avoid breaking existing workflows
+electrofit-analysis = "electrofit_analysis.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/electrofit_analysis"]

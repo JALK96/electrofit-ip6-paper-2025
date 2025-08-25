@@ -1,0 +1,35 @@
+# envs/electrofit.yml
+name: electrofit
+channels:
+  - conda-forge
+  - bioconda   
+dependencies:
+  # ---- Core runtime ----
+  - python=3.12
+  - pip
+
+  # ---- MD/chem stack ----
+  - ambertools>=23,<25
+  - gromacs=2022.4
+  - openbabel>=3.1
+  - mdtraj
+  - numpy
+  - pandas
+  - matplotlib
+  - acpype
+
+  # Toolchain/ABI helpers (prevents libstdc++ issues)
+  - libstdcxx-ng
+  - libgcc-ng
+
+  # ---- Dev & test ----
+  - pytest
+
+  # ---- CLI & workflow ----
+  - typer
+  - snakemake-minimal>=8
+  - mamba
+
+  # ---- Local package(s) in editable mode ----
+  - pip:
+      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/electrofit

@@ -1,0 +1,8 @@
+# Trajectory / MD outputs anywhere under the repo (especially under process/)
+**/process/**/*.xtc
+**/process/**/*.trr
+**/process/**/*.tng
+**/process/**/*.edr
+**/process/**/*.cpt
+
+**/process/

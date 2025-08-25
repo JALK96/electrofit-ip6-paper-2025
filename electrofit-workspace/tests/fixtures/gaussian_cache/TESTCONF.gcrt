@@ -1,0 +1,10 @@
+%chk=TESTCONF.chk
+#p hf/6-31g* scf=tight nosymm pop=mk iop(6/33=2) opt
+
+TESTCONF test
+
+0 1
+C    0.000   0.000   0.000
+O    1.200   0.000   0.000
+H   -0.600   0.900   0.000
+

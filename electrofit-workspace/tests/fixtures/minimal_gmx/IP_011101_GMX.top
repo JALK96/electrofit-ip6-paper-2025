@@ -1,0 +1,7 @@
+; minimal top placeholder for tests
+[ system ]
+IP_011101
+
+[ molecules ]
+; name  number
+IP_011101 1

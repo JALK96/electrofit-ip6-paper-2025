@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "electrofit"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+
+# Keep only small/pure-Python deps here so pip doesn't
+# try to re-install heavy libs already provided by Conda.
+dependencies = [
+  "app",
+  "typer",        # CLI
+  "tqdm",         # progress bars
+  "tomli_w",      # write TOML
+  'tomli>=2.0.1; python_version < "3.11"',
+  # If openmol is optional in your code, move it to "full" below.
+  # If it's required at runtime, keep it here:
+  "openmol",
+]
+
+# Optional: allow pure-pip installs with `pip install .[full]`
+# NOTE: AmberTools and GROMACS are *not* available on PyPI—
+# users must install those via Conda/system separately.
+[project.optional-dependencies]
+full = [
+  "numpy",
+  "pandas",
+  "matplotlib",
+  "mdtraj",
+  "acpype",
+  "openbabel-wheel",  # PyPI wheel (not as feature-complete as conda OpenBabel)
+  # You can add other pip-available extras here as needed.
+]
+
+[project.scripts]
+electrofit = "electrofit.cli.app:main"
+electrofit-plot-charges = "electrofit.cli.plot_charges:main"
+electrofit-write-symmetry = "electrofit.cli.write_symmetry:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/electrofit"]

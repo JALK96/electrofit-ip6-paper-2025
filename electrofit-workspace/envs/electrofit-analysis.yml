@@ -1,0 +1,46 @@
+# envs/electrofit-analysis.yml
+name: electrofit-analysis
+channels:
+  - conda-forge
+  - bioconda   # (only needed if you actually use bioconda packages)
+
+dependencies:
+  # ---- Core runtime ----
+  - python=3.12
+  - pip
+
+  # ---- MD/chem stack ----
+  - ambertools>=23,<25
+  - openbabel>=3.1
+  - gromacs=2022.4
+  - mdtraj
+  - mdanalysis
+  - rdkit
+  - alchemlyb
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - joblib
+  - matplotlib
+  - seaborn
+  - networkx
+  - acpype
+
+  # Toolchain bits (helps with C++ ABI on some systems)
+  - libstdcxx-ng
+  - libgcc-ng
+
+  # ---- Dev & test ----
+  - pytest
+
+  # ---- CLI & workflow ----
+  - typer
+  - snakemake-minimal>=8
+  - mamba
+
+  # ---- Local packages (editable installs) ----
+  - pip:
+      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/electrofit
+      # Renamed distribution: ip6-analysis (path unchanged)
+      - -e /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/packages/ip6-analysis

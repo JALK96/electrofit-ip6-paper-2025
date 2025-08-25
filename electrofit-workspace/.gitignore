@@ -1,0 +1,29 @@
+# Existing ignores
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual env / build
+.venv/
+build/
+.dist/
+
+# Test dummy data (exclude large or generated fixtures)
+tests/dummy_data/
+examples/methane
+examples/methane-opt
+
+# Ignore any process directory anywhere in the repo
+**/process/
+
+# Local caches
+.pytest_cache/
+.ruff_cache/
+.vscode/
+
+
+# Local scratch/demo dirs at repo root
+/tmp_*/
+

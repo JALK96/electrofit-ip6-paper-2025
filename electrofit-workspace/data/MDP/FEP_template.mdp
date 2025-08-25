@@ -1,0 +1,86 @@
+title                    = IP6_FEP
+
+; we'll use the sd integrator (an accurate and efficient leap-frog stochastic dynamics integrator) with 100000 time steps (200ps)
+
+; Run parameters
+integrator               = sd        ; use Langevin dynamics (sd) with built-in thermostat
+nsteps                   = 1000000    ; *0.002 *10^-6 = 2 ns
+dt                       = 0.002     ; 2 fs
+
+; Output control
+nstxout                  = 0         ; no coordinate output in .trr file
+nstvout                  = 0         ; no velocities
+nstenergy                = 1000
+nstcalcenergy            = 50        ; should be a divisor of nstdhdl 
+nstlog                   = 5000    
+nstxout-compressed       = 5000      ; write compressed trajectory every 10 ps
+compressed-x-grps        = system    ; do not output individual groups (e.g. water)
+
+; Bond parameters
+continuation             = yes         ; first dynamics run
+constraint-algorithm     = LINCS       ; holonomic constraints  
+constraints              = h-bonds     ; all bonds (even heavy atom-H bonds) constrained 
+lincs-iter               = 1           ; accuracy of LINCS 
+lincs-order              = 4           ; also related to accuracy 
+
+; Neighborsearching
+cutoff-scheme            = Verlet
+ns-type                  = grid      ; search neighboring grid cells
+nstlist                  = 10
+rcoulomb                 = 1         ; Coulomb cutoff (nm)
+rvdw                     = 1         ; van der Waals cutoff (nm)
+DispCorr                 = EnerPres  ; account for cut-off vdW scheme
+
+; Electrostatics
+coulombtype              = PME       ; Particle Mesh Ewald for long-range electrostatics
+pme-order                = 4         ; cubic interpolation
+fourierspacing           = 0.15      ; grid spacing for FFT
+
+; Temperature coupling (no thermostat since sd includes one)
+tc-grps                  = system
+tau_t                    = 2         ; increased from 0.1 to 2 ps, allow system to visit more phase space for fep 
+ref_t                    = 310
+
+; Pressure coupling (for NPT; if running production in NVT, these might be off)
+pcoupl                   = Parrinello-Rahman    ; Pressure coupling on in NPT
+pcoupltype               = isotropic            ; uniform scaling of box vectors
+tau_p                    = 2.0                  ; time constant, in ps
+ref_p                    = 1.0                  ; reference pressure, in bar
+compressibility          = 4.5e-5               ; isothermal compressibility of water, bar^-1
+refcoord_scaling         = com
+
+; Periodic boundary conditions
+pbc                      = xyz          ; 3-D PBC
+
+; Velocity generation
+gen-vel                  = no           ; Velocity generation is off 
+
+; Free energy coupling parameters for FEP:
+free_energy              = yes
+init_lambda_state        = REPLACE_LAMBDA
+couple-intramol          = yes              ; because we go from one structure to an other, hence it is a transformation no absolute calculation 
+nstdhdl                  = 50               ; frequency for writing energy difference in dhdl.xvg, 0 means no ouput, should be a multiple of nstcalcenergy. 
+dhdl-print-energy        = potential        ; total potential energy of system included
+dhdl-derivatives         = yes              ; write derivatives of Hamiltonian with respect to lambda
+separate-dhdl-file       = yes
+calc-lambda-neighbors    = -1               ; calculate Delta H values for all other lambda windows
+
+; Simultaneous decoupling of both interactions:
+couple-lambda0           = vdw-q         ; full interactions at lambda=0
+couple-lambda1           = vdw-q         ; full interactions at lambda=1
+
+; init_lambda_state        0    1    2    3    4    5    6    7    8    9    10   11   12   
+bonded_lambdas           = 0.00 0.05 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 1.00 
+coul_lambdas             = 0.00 0.05 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 1.00 
+vdw_lambdas              = 0.00 0.05 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 1.00 
+mass_lambdas             = 0.00 0.05 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 1.00 
+restraint_lambdas        = 0.00 0.05 0.10 0.20 0.30 0.40 0.50 0.60 0.70 0.80 0.90 0.95 1.00 
+temperature_lambdas      = 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 
+
+; Soft-core settings to avoid endpoint singularities:
+sc-coul                  = yes
+sc-vdw                   = yes
+sc-alpha                 = 0.5
+sc-power                 = 1
+
+refcoord-scaling = all ; important for fep

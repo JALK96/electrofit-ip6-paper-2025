@@ -1,0 +1,5 @@
+; no defaults section here
+[ system ]
+TEST
+[ molecules ]
+LIG 1
