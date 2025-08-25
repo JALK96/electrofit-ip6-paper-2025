@@ -43,8 +43,6 @@ class GromacsRuntimeSection:
 
 @dataclass
 class GMXSection:
-    script_relpath: str = "scripts/gmx.sh"
-    entrypoint: str = "python -m electrofit.adapters.gromacs"
     runtime: GromacsRuntimeSection = field(default_factory=GromacsRuntimeSection)
 
 # Simulation parameters (Step 3)

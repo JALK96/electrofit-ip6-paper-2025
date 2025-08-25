@@ -21,11 +21,11 @@ echo "Remote Host: $REMOTE_HOST"
 # ------------ ---------------- ------------- -----------
 
 # Generate a unique Screen session name to prevent conflicts
-SCREEN_SESSION="$(basename "$(dirname "$SCRIPT_DIR")")_$(date +%Y%m%d%H%M%S)"
+SCREEN_SESSION="electrofit_$(date +%Y%m%d%H%M%S)"
 echo "Screen Session Name: $SCREEN_SESSION"
 
 # Name of the conda environment to use
-CONDA_ENV="electrofit"
+CONDA_ENV="electrofit-analysis"
 echo "Conda Environment: $CONDA_ENV"
 
 # -----------------------------

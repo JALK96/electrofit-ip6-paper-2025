@@ -1,0 +1,2 @@
+run_all.sh to generate partial charges for methane using the providet input + run a final gmx simulation
+if you have a shared file system you can run remote via the run_bash_remote.sh script

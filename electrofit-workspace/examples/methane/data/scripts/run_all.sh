@@ -1,6 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-PROJECT="electrofit-workspace/examples/methane"
+# Directory where the script resides
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# PROJECT = parent of parent of SCRIPT_DIR
+PROJECT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+echo "SCRIPT_DIR = $SCRIPT_DIR"
+echo "PROJECT    = $PROJECT"
 
 run_step() {
     echo ">>> Running: $*"

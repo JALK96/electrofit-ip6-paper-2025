@@ -16,7 +16,7 @@ class DecisionModel:
     charges_origin: str  # 'bcc' | 'resp_initial' | 'resp_ensemble' | 'pending' | 'resp_ensemble_symavg'
     symmetry_requested: bool
     symmetry_ignore_flag: bool
-    symmetry_effective: str  # 'none' | 'applied' | 'applied_no_mod'
+    symmetry_effective: str  # 'applied (antechamber defined)' | 'applied (user defined)' | 'none'
     ensemble_mode: bool
     notes: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -40,11 +40,8 @@ class DecisionModel:
         return base + list(self.extra)
 
     def log(self, step: str) -> None:
-        # Human readability: add space after commas
-        #line = ", ".join(f"{k}={v}" for k, v in self.kv_pairs())
-        #logging.info(f"[{step}][decisions] {line}")
-
-        # Optional grouped pretty table (same env switch as cfg table)
+       
+        # Human readability: grouped pretty table (same env switch as cfg table)
         if os.environ.get('ELECTROFIT_LOG_TABLE', '1') not in {'0', 'false', 'False'}:
             try:
                 # Prepare grouped sections
@@ -102,21 +99,21 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
         # Symmetry ignored in bcc path
         if adjust_sym or ignore_sym:
             warnings.append('symmetry flags ignored (protocol=bcc initial path)')
-        symmetry_effective = 'none'
+        symmetry_effective = 'applied (antechamber defined)'
     elif protocol == 'opt':
         charges_origin = 'resp_initial'
         if adjust_sym:
             if ignore_sym:
-                symmetry_effective = 'applied_no_mod'
+                symmetry_effective = 'none'
                 warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
             else:
-                symmetry_effective = 'applied'
+                symmetry_effective = 'applied (user defined)'
         else:
-            symmetry_effective = 'none'
+            symmetry_effective = 'applied (antechamber defined)'
     else:
         charges_origin = 'bcc'  # Conservative fallback
         warnings.append(f'unknown protocol={protocol} -> treating as bcc path')
-        symmetry_effective = 'none'
+        symmetry_effective = 'applied (antechamber defined)'
     return DecisionModel(
         stage='initial',
         protocol=protocol,
@@ -143,12 +140,12 @@ def build_conformer_decision(protocol: str | None, adjust_sym: bool, ignore_sym:
         warnings.append(f'unknown protocol={protocol} -> continuing with ensemble RESP')
     if adjust_sym:
         if ignore_sym:
-            symmetry_effective = 'applied_no_mod'
+            symmetry_effective = 'none'
             warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
         else:
-            symmetry_effective = 'applied'
+            symmetry_effective = 'applied (user defined)'
     else:
-        symmetry_effective = 'none'
+        symmetry_effective = 'applied (antechamber defined)'
     return DecisionModel(
         stage='conformer',
         protocol=protocol,
@@ -194,7 +191,7 @@ def build_sampling_decision(
         charges_origin='pending',
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
-        symmetry_effective='none',
+        symmetry_effective='applied (antechamber defined)',
         ensemble_mode=False,
         notes=notes,
         warnings=warnings,
@@ -226,14 +223,14 @@ def build_aggregation_decision(
             warnings.append('group average requested but not applied (missing data or early exit)')
     if adjust_sym:
         if ignore_sym:
-            symmetry_effective = 'applied_no_mod'
+            symmetry_effective = 'none'
             warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
         else:
-            symmetry_effective = 'applied' if symmetry_json_found else 'none'
-            if symmetry_effective == 'none':
+            symmetry_effective = 'applied (user defined)' if symmetry_json_found else 'applied (antechamber defined)'
+            if symmetry_effective == 'applied (antechamber defined)':
                 warnings.append('symmetry JSON missing during aggregation')
     else:
-        symmetry_effective = 'none'
+        symmetry_effective = 'applied (antechamber defined)'
     if protocol == 'opt':
         notes.append('aggregation after initial opt + ensemble RESP')
     elif protocol == 'bcc':

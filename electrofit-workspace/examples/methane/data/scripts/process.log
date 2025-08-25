@@ -1,0 +1,18 @@
+2025-08-25 18:20:07 - === Script Started ===
+2025-08-25 18:20:07 - Script Directory: /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/examples/methane/data/scripts
+2025-08-25 18:20:07 - Bash Script Path: run_all.sh
+2025-08-25 18:20:07 - Remote Host: qcm04
+2025-08-25 18:20:07 - Screen Session Name: data_20250825182007
+2025-08-25 18:20:07 - Built SSH Command: cd "/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/examples/methane/data/scripts" && screen -dmS "data_20250825182007" bash -lc '
+  source "/home/johannal96/miniconda3/etc/profile.d/conda.sh";
+  conda activate electrofit-analysis;
+  echo "[INFO] Using python: $(which python)";
+  echo "[INFO] electrofit path test:";
+  python -c "import electrofit, sys; print(\"electrofit from:\", electrofit.__file__, \"python:\", sys.executable)";
+  bash "run_all.sh";
+  exec bash
+'
+2025-08-25 18:20:07 - Connecting to qcm04 to execute the command.
+2025-08-25 18:20:09 - SSH command executed successfully on qcm04.
+2025-08-25 18:20:09 - Successfully started 'run_all.sh' in Screen session 'data_20250825182007' on qcm04 in conda environment electrofit-analysis.
+2025-08-25 18:20:09 - === Script Completed Successfully ===
