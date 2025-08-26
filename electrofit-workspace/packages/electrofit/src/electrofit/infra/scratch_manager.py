@@ -174,7 +174,7 @@ def finalize_scratch_directory(
                     logging.info(f"File '{item}' differs. Copied as '{os.path.basename(new_dst)}'.")
             else:
                 shutil.copy2(src, dst)
-                logging.info(f"Copied file '{item}' back to original directory.")
+                logging.debug(f"Copied file '{item}' back to original directory.") # set the level to debug to reduce log length. 
         elif os.path.isdir(src):
             if os.path.exists(dst):
                 base = dst
