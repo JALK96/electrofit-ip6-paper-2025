@@ -42,5 +42,4 @@ dependencies:
   # ---- Local packages (editable installs) ----
   - pip:
       - -e ./packages/electrofit
-      # Renamed distribution: ip6-analysis (path unchanged)
       - -e ./packages/ip6-analysis

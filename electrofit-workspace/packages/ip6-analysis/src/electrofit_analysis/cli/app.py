@@ -14,7 +14,7 @@ Subcommands
 Usage examples
 --------------
 python -m electrofit_analysis.cli.app distance -p /path/to/project
-python -m electrofit_analysis.cli.app count -p /path/to/project
+python -m electrofit_analysis.cli.app dist-count -p /path/to/project
 python -m electrofit_analysis.cli.app summarize-nap -p /path/to/project -o /path/to/out
 python -m electrofit_analysis.cli.app plot-2d -p /path/to/project [--subdir process]
 python -m electrofit_analysis.cli.app coordination -p /path/to/project [--subdir process] [--determine-global-y] [--rdf-y-max 1800] [--plot-projection]
@@ -110,14 +110,15 @@ def _cmd_hbonds_compare(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ip6-analysis",
-        description="Unified CLI for IP6 analysis tools (formerly electrofit-analysis).",
+        description="Unified CLI for IP6 analysis tools.",
+        formatter_class=argparse.RawTextHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # distance
     p_dist = sub.add_parser(
         "distance",
-        help="Compute Na–P distances for an IP6 project (per microstate).",
+        help="Compute Na–P distances for the IP6 project (per microstate).",
     )
     p_dist.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
@@ -126,9 +127,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # count
     p_count = sub.add_parser(
-        "count",
+        "dist-count",
         help=(
-            "Run Na–P distances, Na+ counts, buried volume, and excess analysis for an IP6 project."
+            "Run Na–P distances, Na+ counts, buried volume, and excess analysis for the IP6 project."
         ),
     )
     p_count.add_argument(
@@ -218,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     # dihedrals
     p_dih = sub.add_parser(
         "dihedrals",
-        help="Analyze dihedral angles from final GMX runs and generate plots.",
+        help="Analyze phosphate and ring dihedral angles from final GMX runs and generate plots.",
     )
     p_dih.add_argument(
         "-p",
@@ -248,7 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ppm = sub.add_parser(
         "pp-matrix",
         help=(
-            "Compute P-to-P interaction matrices from H-bond data and draw directed diagrams."
+            "Compute P-to-P interaction matrices from H-bond data and draw directed diagrams.\n"
+            "Run 'ip6-analysis hbonds -p <project>' before using."
         ),
     )
     p_ppm.add_argument(

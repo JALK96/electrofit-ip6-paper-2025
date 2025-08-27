@@ -391,7 +391,7 @@ def main(project_dir: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Compute Na–P distances, Na+ counts, and excess metrics for an IP6 project."
+            "Compute Na–P distances, Na+ counts, and excess metrics for the IP6 project."
         )
     )
     parser.add_argument(

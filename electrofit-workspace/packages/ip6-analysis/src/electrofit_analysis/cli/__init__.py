@@ -1,4 +1,4 @@
-"""CLI subpackage for ip6-analysis (formerly electrofit-analysis).
+"""CLI subpackage for ip6-analysis.
 
 This package contains command-line interfaces for various analysis tasks.
 The console scripts should point to :mod:`electrofit_analysis.cli.app:main`.

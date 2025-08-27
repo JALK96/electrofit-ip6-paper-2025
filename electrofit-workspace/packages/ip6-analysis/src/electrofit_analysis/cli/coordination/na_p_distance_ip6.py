@@ -109,7 +109,7 @@ def main(project_dir: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Compute Na–P distances for an IP6 project. Provide the project root via --project."
+            "Compute Na–P distances for the IP6 project. Provide the project root via --project."
         )
     )
     parser.add_argument(
