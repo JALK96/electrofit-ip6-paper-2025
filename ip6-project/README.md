@@ -117,7 +117,7 @@ of the input and run the pipeline steps.
 
     - If you want to rerun the entire set of microstates, you can copy the entire input directory from `ip6-project/data` to `/path/to/ip6-rerun/data`
 
-    - After copying, you can run the pipeline steps as described above. The steps will process all microstates in the new input directory, without specifying individual microstates.
+    - After copying, you can run the pipeline steps as described above. The steps will process all microstates in the new input directory.
   
     - You would still be able to run steps for individual microstates by using the `--molecule` flag, e.g.
 

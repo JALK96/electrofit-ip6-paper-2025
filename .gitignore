@@ -30,6 +30,7 @@ htmlcov/
 
 
 # Trajectory / MD outputs anywhere under the repo (especially under process/)
+**/process/
 **/*.xtc
 **/*.trr
 **/*.tng
@@ -37,5 +38,5 @@ htmlcov/
 **/*.cpt
 **/step.log
 
+# Directory for potential rerun
 ip6-rerun/
-**/process/
