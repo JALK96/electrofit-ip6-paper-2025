@@ -35,7 +35,7 @@ htmlcov/
 **/*.tng
 **/*.edr
 **/*.cpt
-
 **/step.log
 
+ip6-rerun/
 **/process/

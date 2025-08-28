@@ -41,12 +41,50 @@ def _cmd_count(args: argparse.Namespace) -> None:
 
 
 def _cmd_summarize_nap(args: argparse.Namespace) -> None:
+    # Import the updated summarizer (keep the module path you use in your package)
     from .coordination.summerize_nap_dist_count_ip6 import main as summarize_main
 
     project = os.path.abspath(args.project)
     root_dir = os.path.join(project, "process")
     out_dir = os.path.abspath(args.output_dir)
-    summarize_main(root_dir, out_dir)
+
+    # helpers to parse comma-separated lists
+    def _parse_list(opt_str, allowed, default):
+        if opt_str is None:
+            return set(default)
+        items = {s.strip().lower() for s in opt_str.split(",") if s.strip()}
+        bad = items - set(allowed)
+        if bad:
+            raise SystemExit(
+                f"Unknown option(s) {sorted(bad)}; allowed: {sorted(allowed)}"
+            )
+        return items
+
+    # distance/count plot types
+    plots = _parse_list(
+        getattr(args, "plots", None),
+        allowed={"means", "box", "overlaid", "stats"},
+        default={"means", "box", "overlaid", "stats"},
+    )
+    # coordination plot types
+    coord_plots = _parse_list(
+        getattr(args, "coord_plots", None),
+        allowed={"box", "stats"},
+        default={"box"},
+    )
+
+    # Forward all required params to the updated summarizer.
+    # (If none of --distance/--count/--coordination are set, the summarizer's
+    #  own default is to run all three, so we just pass the booleans as-is.)
+    summarize_main(
+        root_dir=root_dir,
+        output_dir=out_dir,
+        do_distance=getattr(args, "distance", False),
+        do_count=getattr(args, "count", False),
+        do_coord=getattr(args, "coordination", False),
+        plots=plots,
+        coord_plots=coord_plots,
+    )
 
 
 def _cmd_plot_2d(args: argparse.Namespace) -> None:
@@ -137,11 +175,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_count.set_defaults(func=_cmd_count)
 
+
     # summarize-nap
     p_sum = sub.add_parser(
         "summarize-nap",
         help=(
-            "Summarize Na–P distances/counts/coordination across patterns. Requires an output directory."
+            "Summarize Na–P distances/counts/coordination across patterns. Requires an output directory.\n"
+            "This command aggregates results from all microstates and produces summary reports.\n"
+            "Run 'ip6-analysis dist-count -p <project>' and/or 'ip6-analysis coordination -p <project>'\n"
+            "before using this, to generate the necessary input files."
         ),
     )
     p_sum.add_argument(
@@ -150,6 +192,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_sum.add_argument(
         "-o", "--out", "--output", dest="output_dir", required=True, help="Output directory."
     )
+
+    # NEW: metric selectors (non-mutually-exclusive)
+    p_sum.add_argument(
+        "--distance", action="store_true",
+        help="Generate distance summaries (requires: distances_NaP*.xvg). If none of --distance/--count/--coordination is given, all are run."
+    )
+    p_sum.add_argument(
+        "--count", action="store_true",
+        help="Generate ion-count summaries (requires: ion_count_P*.xvg)."
+    )
+    p_sum.add_argument(
+        "--coordination", action="store_true",
+        help="Generate coordination summaries (requires: NaP_coordination_bool.npy)."
+    )
+
+    # NEW: plot-type toggles
+    p_sum.add_argument(
+        "--plots", default="means,box,overlaid,stats",
+        help="Comma-separated plot types for distance/count. Choices: means,box,overlaid,stats. Default: all."
+    )
+    p_sum.add_argument(
+        "--coord-plots", default="box",
+        help="Comma-separated plot types for coordination. Choices: box,stats. Default: box."
+    )
+
     p_sum.set_defaults(func=_cmd_summarize_nap)
 
     # plot-2d

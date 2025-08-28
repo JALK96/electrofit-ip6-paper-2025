@@ -1,0 +1,37 @@
+# Input file for molecule parameters
+# Please specify the following:
+# - MoleculeName: Must match the name of the MOL2 structure file.
+# - ResidueName: A short name for the residue (3 characters max).
+# - Charge: The total molecular charge.
+# - AdjustSymmetry: Specify symmetry adjustments (TRUE/FALSE); if FALSE or not given, symmetry is defined by antechamber.
+# - AtomType: Atom type used for simulations with Gromacs (gaff2/gaff/amber (atom types according to AMBER14SB forcefield)).
+# - BoxType: Type of simulation box (e.g., dodecahedron).
+# - BoxEdgeDistance: Distance (in nm) between the molecule and the box edge.
+
+# Global parameters
+# -----------------
+Protocol: bcc                   # Specify the Protocol, ether "bcc" or "opt"
+MoleculeName: IP_111011         # The full name of the molecule
+ResidueName: I59                # A short, three-character residue name
+Charge: -7                      # Total molecular charge
+AdjustSymmetry: TRUE            # Adjust symmetry:
+                                #   - If FALSE, symmetry is specified by antechamber.
+                                #   - If TRUE, symmetry is specified based on a json file that maps equivalent/symmetric atoms
+IgnoreSymmetry: TRUE            # given a json symmetry file - the instructions are ignored and all atoms are assumed to be not symmetric
+CalculateGroupAverage: TRUE
+
+BaseScratchDir: /scratch/johannal96/tmp     # Directory to run calculations
+
+
+# Simulation parameters
+# ---------------------
+# - in order to run a simulation make sure to place a directory called MDP in the data directory
+# - MDP must contain for files: em_steep.mdp, NPT.mdp, NVT.mdp and Production.mdp
+
+AtomType: gaff2                 # Atom type for Gaussian simulation (gaff/gaff2/amber)
+BoxType: dodecahedron           # Box shape for simulation
+BoxEdgeDistance: 1.2            # Distance from molecule to box edge (in nm)
+Cation: NA                      # Cation name for GMX
+Anion: CL                       # Anion name for GMX
+IonConcentration: 0.15          # Ion concentration for the replacement of solvent with the specified ions
+

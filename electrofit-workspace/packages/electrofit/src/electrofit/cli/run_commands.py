@@ -306,7 +306,7 @@ def run_gaussian_calculation(input_file, molecule_name, scratch_dir):
         ran = True
 
     if not ran:
-        raise RuntimeError("Neither rung16 nor g16 is available in PATH.")
+        raise RuntimeError("Neither rung16 nor g16 is available in PATH, or you interrupted the run forcefully.")
 
     # Now check Gaussian output files
     log_file = f"{input_file}.log"

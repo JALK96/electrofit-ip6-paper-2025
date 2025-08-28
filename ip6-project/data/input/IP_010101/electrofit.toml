@@ -1,0 +1,35 @@
+# electrofit.toml — v0.2
+# generated: 2025-08-28T14:03:21
+
+[project]
+name                    = "IP_010101"
+molecule_name           = "IP_010101"   # must match the MOL2 filename stem
+residue_name            = "I21"         # 3 char residue code
+charge                  = -9
+protocol                = "bcc"         # "bcc" or "opt"
+adjust_symmetry         = true
+ignore_symmetry         = true
+calculate_group_average = true
+
+# Atom typing
+atom_type               = "gaff2"       # gaff2 | gaff | amber
+
+[simulation]
+forcefield              = "amber14sb.ff" # folder with forcefield.itp, tip3p.itp, ions.itp
+
+[paths]
+mdp_dir                 = "data/MDP"    # contains em_steep.mdp, NVT.mdp, NPT.mdp, Production.mdp
+base_scratch_dir        = "/scratch/johannal96/tmp"
+
+[simulation.box]
+type    = "dodecahedron"           # e.g. dodecahedron, cubic, triclinic
+edge_nm = 1.2                      # distance from solute to box edge (nm)
+
+[simulation.ions]
+cation        = "NA"
+anion         = "CL"
+concentration = 0.15               # mol/L
+
+[gromacs.runtime]
+threads = 16
+pin     = true                     # use: -pin on
