@@ -18,6 +18,8 @@ project-specific notes.
 
 ## Per-microstate `process/<MICROSTATE>/` layout
 
+NOTE: If you are on github, you will not find any process directory. Since this is a output directory for molecular dynamics simulations, it is to big to be included in the repository.
+
 Each microstate directory contains subfolders that reflect the
 pipeline steps and post-processing. Example structure for `process/IP_111101/`:
 
