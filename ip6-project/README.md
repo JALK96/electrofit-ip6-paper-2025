@@ -83,8 +83,7 @@ of the input and run the pipeline steps.
     - Run with verbose logging to capture more output (helpful for debugging), e.g.:
   
     ```bash
-    ELECTROFIT_LOG_LEVEL=DEBUG \
-    electrofit step5 --project /path/to/ip6-rerun
+    ELECTROFIT_LOG_LEVEL=DEBUG electrofit step5 --project /path/to/ip6-rerun
     ```
 
 4. Locate the generated partial charges and aggregated results
