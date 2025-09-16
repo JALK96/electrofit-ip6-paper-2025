@@ -1,0 +1,1 @@
+gmx hbond -s holo_open.tpr -f fitted_traj_100.xtc -hbn prot-ip6_hb_idx.ndx -num prot-ip6_hb_num.xvg -dist prot-ip6_hb_dist.xvg -g prot-ip6_hb.log -hbm prot-ip6_hb_matrix.xpm

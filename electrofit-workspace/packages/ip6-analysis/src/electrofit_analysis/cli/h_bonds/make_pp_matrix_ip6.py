@@ -5,8 +5,10 @@ import sys
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import networkx as nx
 from matplotlib.patches import FancyArrowPatch
+
 
 # MODE notes:
 #  - 'union' (default): fraction of time with at least one O–O bond for each P_i->P_j (per-frame OR)
@@ -15,6 +17,7 @@ from matplotlib.patches import FancyArrowPatch
 
 #
 # ---------- O-atom -> phosphate mapping ----------
+
 # GROMACS mapping (as found in hb.log): oxygen token -> GROMACS phosphate label (P, P1..P5)
 GRO_O2P = {
     'O':'P',  'O6':'P',  'O7':'P',  'O8':'P',
@@ -26,6 +29,20 @@ GRO_O2P = {
 }
 # Relabel GROMACS phosphate labels to paper convention P1..P6
 RELABEL_P = {'P':'P1','P1':'P2','P2':'P3','P3':'P4','P4':'P5','P5':'P6'}
+
+Lauren = False
+if Lauren: 
+    # Lauren has already correct labels - her map here: 
+    GRO_O2P = {
+        'O1': 'P1',  'O7': 'P1',  'O8': 'P1',  'O9': 'P1',
+        'O2': 'P2', 'O10': 'P2', 'O11': 'P2', 'O12': 'P2',
+        'O3': 'P3', 'O13': 'P3', 'O14': 'P3', 'O15': 'P3',
+        'O4': 'P4', 'O16': 'P4', 'O17': 'P4', 'O18': 'P4',
+        'O5': 'P5', 'O19': 'P5', 'O20': 'P5', 'O21': 'P5',
+        'O6': 'P6', 'O22': 'P6', 'O23': 'P6', 'O24': 'P6'
+    }
+    RELABEL_P = {'P1':'P1','P2':'P2','P3':'P3','P4':'P4','P5':'P5', 'P6':'P6'}
+
 P2IDX = {f'P{i}': i-1 for i in range(1,7)}
 
 # Map an oxygen token (GROMACS) to a paper phosphate label (P1..P6)
@@ -472,13 +489,14 @@ def draw_phosphorus_diagram(
         
     # 10) Draw node labels
     nx.draw_networkx_labels(
-        G, pos, labels={i: f"P{i}" for i in G.nodes()}, font_size=25, ax=ax
+        G, pos, labels={i: f"P{i}" for i in G.nodes()}, font_size=25, font_family="Nimbus Roman", ax=ax
     )
 
     # 11) Add centered species label
     ax.text(
         0.5, 0.0, f"{species_bits}",
         fontsize=26, #fontweight="bold",
+        fontdict={"family": "Nimbus Roman"},
         ha="center", va="center",
         transform=ax.transAxes
     )

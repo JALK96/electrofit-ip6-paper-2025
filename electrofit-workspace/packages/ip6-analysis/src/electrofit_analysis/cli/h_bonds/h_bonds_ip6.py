@@ -2,6 +2,7 @@ import math
 import argparse
 import os
 import re
+import subprocess
 from itertools import combinations
 
 import matplotlib.pyplot as plt
@@ -1011,12 +1012,36 @@ def parse_hbond_log_to_dataframe(file_path):
 
     return df
 
+
+def _determine_hbond_command() -> str:
+    """Determine which gmx hbond variant supports the expected flags."""
+    try:
+        result = subprocess.run(
+            ["gmx", "--version"],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return "gmx hbond"
+
+    match = re.search(r"GROMACS version:\s*(\d+)\.(\d+)", result.stdout)
+    if not match:
+        return "gmx hbond"
+
+    major, _minor = int(match.group(1)), int(match.group(2))
+    if major > 2023:
+        return "gmx hbond-legacy"
+    return "gmx hbond"
+
+
 def main(project_dir: str, viz: bool = False) -> None:
     """Run hydrogen bond analysis for all molecules in the project's process directory.
 
     Args:
         project_dir: Path to the project root (must contain a 'process' subdirectory).
     """
+    preferred_hbond_command = _determine_hbond_command()
     process_dir = os.path.join(project_dir, "process")
 
     if not os.path.isdir(process_dir):
@@ -1048,13 +1073,37 @@ def main(project_dir: str, viz: bool = False) -> None:
 
                 print(f"reading gro file: {gro_file_path}")
                 print(f"reading xtc file: {xtc_file_path}")
+                hbond_candidates = [preferred_hbond_command]
+                if preferred_hbond_command != "gmx hbond-legacy":
+                    hbond_candidates.append("gmx hbond-legacy")
+
+                selected_hbond_command = None
+                last_error = None
+
+                for candidate in hbond_candidates:
+                    try:
+                        run_command(
+                            f'echo "2\n2\n" | {candidate} -s {gro_file_path} -f {xtc_file_path} -hbn intra_hb_idx.ndx -num intra_hb_num.xvg -dist intra_hb_dist.xvg -g intra_hb.log -hbm intra_hb_matrix.xpm',
+                            cwd=dest_dir,
+                        )
+                    except subprocess.CalledProcessError as err:
+                        last_error = err
+                        if candidate != hbond_candidates[-1]:
+                            print(
+                                "gmx hbond failed with legacy flags; retrying with gmx hbond-legacy."
+                            )
+                        continue
+                    selected_hbond_command = candidate
+                    break
+
+                if selected_hbond_command is None:
+                    raise last_error  # Propagate the last failure if everything failed.
+
+                if selected_hbond_command.endswith("hbond-legacy"):
+                    print("Using gmx hbond-legacy for compatibility with legacy flags.")
 
                 run_command(
-                    f'echo "2\n2\n" | gmx hbond -s {gro_file_path} -f {xtc_file_path} -hbn intra_hb_idx.ndx -num intra_hb_num.xvg -dist intra_hb_dist.xvg -g intra_hb.log -hbm intra_hb_matrix.xpm',
-                    cwd=dest_dir,
-                )
-                run_command(
-                    f'echo "2\n5\n" | gmx hbond -s {gro_file_path} -f {xtc_file_path} -hbn inter_hb_idx.ndx -num inter_hb_num.xvg -dist inter_hb_dist.xvg -g inter_hb.log -hbm inter_hb_matrix.xpm',
+                    f'echo "2\n5\n" | {selected_hbond_command} -s {gro_file_path} -f {xtc_file_path} -hbn inter_hb_idx.ndx -num inter_hb_num.xvg -dist inter_hb_dist.xvg -g inter_hb.log -hbm inter_hb_matrix.xpm',
                     cwd=dest_dir,
                 )
 

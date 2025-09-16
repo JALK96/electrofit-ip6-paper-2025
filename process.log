@@ -1,0 +1,18 @@
+2025-09-15 09:36:36 - === Script Started ===
+2025-09-15 09:36:36 - Script Directory: /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025
+2025-09-15 09:36:36 - Bash Script Path: /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/ip6-rerun/run_scritps/run_step8.sh
+2025-09-15 09:36:36 - Remote Host: qcm08
+2025-09-15 09:36:36 - Screen Session Name: 2025_20250915093636
+2025-09-15 09:36:36 - Built SSH Command: cd "/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025" && screen -dmS "2025_20250915093636" bash -lc '
+  source "/home/johannal96/miniconda3/etc/profile.d/conda.sh";
+  conda activate electrofit;
+  echo "[INFO] Using python: $(which python)";
+  echo "[INFO] electrofit path test:";
+  python -c "import electrofit, sys; print(\"electrofit from:\", electrofit.__file__, \"python:\", sys.executable)";
+  bash "/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/ip6-rerun/run_scritps/run_step8.sh";
+  exec bash
+'
+2025-09-15 09:36:36 - Connecting to qcm08 to execute the command.
+2025-09-15 09:36:39 - SSH command executed successfully on qcm08.
+2025-09-15 09:36:39 - Successfully started '/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/ip6-rerun/run_scritps/run_step8.sh' in Screen session '2025_20250915093636' on qcm08 in conda environment electrofit.
+2025-09-15 09:36:39 - === Script Completed Successfully ===
