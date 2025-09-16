@@ -67,6 +67,9 @@ desired_count  = 12
      canonical description from the config: either `SaltConfig` or
      `IonTargetConfig`. This should encapsulate the calculations (volume, counts,
      neutrality checks) so the adapters remain thin.
+   - During config load, compute all derived quantities (box vectors, total volume,
+     ion counts per species, inferred counter-ion counts, resulting molarities) and
+     log them so the user immediately sees the consequences of their choices.
 3. **Neutrality and ion bookkeeping**
    - The helper determines final ion counts by combining solute charge, target
      entries, and `enforce_neutrality`:
@@ -84,7 +87,7 @@ desired_count  = 12
        * `triclinic`/`rectangular`: simple decomposition.
        * `dodecahedron`: use GROMACS’ rhombic dodecahedron volume relation
          (`V = (16/9) * sqrt(3) * a³`, where `a` is the short box vector). Confirm
-         the formula via documentation or experiments.
+         the formula via documentation or experiments (Use documented 0.71 (dodeca) and 0.77 (trunc. octa) volume ratios to derive the scalar passed to -box).
    - For target mode, base the volume calculation on whichever species provides a
      concentration entry (currently only the positive ion). If neither carries a
      concentration, raise an error explaining that volume cannot be determined.
@@ -102,6 +105,8 @@ desired_count  = 12
          instead call `genion` with explicit `-np`/`-nn` derived from the helper.
        * Keep `-neutral` optional: when `enforce_neutrality` is false, allow the user
          to request non-neutral setups by skipping the flag.
+       * In target mode, call genion with -np/-nn without -neutral (unless you are purposely letting    genion finish neutrality).
+       * In legacy salt mode, emit only -conc (and optionally -neutral).
    - Add logging to record: requested vs inferred counts, computed volume, resulting
      box vectors, and ions inserted (parse stdout from `genion`). Surface warnings when
      neutrality constraints are disabled or violated, or when `salt_concentration` or
@@ -119,7 +124,8 @@ desired_count  = 12
    - Provide a warning in logs when legacy keys are read, when neutrality is disabled,
      or when `salt_concentration`/`edge_nm` are ignored due to targets.
 8. **Testing & validation**
-   - Add unit tests for config parsing, neutrality checks, and geometry helpers.
+   - Add unit tests for config parsing, neutrality checks, geometry helpers, and the
+     derived-quantity logging output.
    - Add regression tests covering:
        * Fixed-count scenarios with positive, negative, and neutral solute charges.
        * Both species specified vs single-species inference.
@@ -163,7 +169,15 @@ desired_count  = 12
      observed counts, solute charge, and suggested corrected counts for the TOML.
    - Return a structure that clearly indicates which counts were user-provided vs
      inferred to assist logging.
-4. **Adapter refactor**
+4. **Derived quantity logging**
+   - As part of `load_config`, call the helper and log a summary:
+       * Mode (salt vs target), box type, requested counts, inferred counter-ions, and
+         resulting volumes/edge lengths.
+       * Highlight ignored parameters (`edge_nm`, `salt_concentration`) and any
+         inferred values.
+       * Expose the computed molarity from the final volume and counts so users see
+         the effective concentration immediately.
+5. **Adapter refactor**
    - Update `set_up_production` signature to accept the new ion spec; keep backward
      compatibility path for `conc`/`d` until all callers are migrated.
    - Insert geometry calculation before calling `editconf`; log computed box
@@ -171,23 +185,26 @@ desired_count  = 12
    - In target mode: call `genion` with `-np`/`-nn` derived from the helper and omit
      `-conc` entirely. When neutrality is disabled, skip `-neutral` to prevent
      `genion` from altering counts.
-5. **Call site changes**
+
+6. **Call site changes**
    - Update `pipeline/steps/step3.py` and `domain/final_sim.py` to gather the new
      fields and pass them to `set_up_production` (likely via the helper).
    - Ensure CLI defaults (`templates/electrofit.toml`) expose the neutrality flag and
      illustrate both the simple and target-count configurations.
-6. **Docs & messaging**
+7. **Docs & messaging**
    - Update `docs/README.md` and other tutorials to explain configuration options and
      neutrality logic (including error/warning scenarios).
    - Mention the change in release notes / changelog and highlight new log outputs.
-7. **Testing strategy**
-   - Unit tests for config parsing, neutrality checks, and geometry conversions.
+8. **Testing strategy**
+   - Unit tests for config parsing, neutrality checks, geometry conversions, and
+     logging of derived values.
    - Regression tests verifying computed box edge for a cubic case (≈5.08 nm for 12
      ions @ 150 mM) and that counter-ion counts neutralise systems with positive and
      negative solute charges.
    - Tests ensuring warnings/errors trigger correctly when neutrality requirements
-     are unmet or disabled, when dual concentrations are specified, and when both
-     salt and target modes are set simultaneously.
+     are unmet or disabled, when dual concentrations are specified, when both
+     salt/target modes are set simultaneously, and that the derived summary matches
+     expectations.
 
 ## Open Questions & Follow-ups
 - Confirm the exact formula GROMACS uses for `-bt dodecahedron` volumes.
@@ -198,3 +215,4 @@ desired_count  = 12
   strict enforcement unless `enforce_neutrality = false`).
 - Consider persisting the computed box vectors and final ion counts in the snapshot
   TOML for auditability (optional but could help debugging).
+- Order of operations for concentration mode: Because -conc uses the .tpr volume, make sure your pipeline sets the final box before grompp (which writes the .tpr) and then runs genion. Otherwise the ion count will be computed from the wrong volume.
