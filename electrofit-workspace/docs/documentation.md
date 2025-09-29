@@ -54,6 +54,51 @@ Architektur-Ziel: Domain ↔ Adapter Schnitt klar; IO-Helfer modularisieren (kei
 
 ---
 
+## Ionenkonfiguration (ab Refactor 2025)
+
+Seit der Zielkonzentrations-Refaktorierung stehen zwei Betriebsarten zur Verfügung:
+
+| Modus | Wann einsetzen | Schlüssel | Verhalten |
+|-------|----------------|-----------|-----------|
+| *Salt* (Legacy) | einfache Systeme ohne feste Ionenzahl | `simulation.ions.salt_concentration` (oder historisch `concentration`) | `editconf -d` verwendet den Randabstand (`box.edge_nm`), `genion -conc` wählt die Ionenzahl und passt sie per `-neutral` an den Soluten an. |
+| *Target* (neu) | gewünschte absolute Ionenzahl + Konzentration | `simulation.ions.targets.*` mit optional `enforce_neutrality` | Das Lade-Subsystem berechnet das benötigte Boxvolumen, erzeugt explizite Boxvektoren und ruft `genion -np/-nn` mit den vorgegebenen Zahlen auf. Neutralisierung wird nur vorgenommen, wenn sie nicht bereits konsistent ist. |
+
+Minimalbeispiel für den Target-Modus (150 mM bei 12 Na⁺):
+
+```toml
+[simulation.ions]
+cation             = "NA"
+anion              = "CL"
+enforce_neutrality = true
+
+[simulation.ions.targets]
+[simulation.ions.targets.positive_ion]
+desired_count  = 12
+concentration  = 0.150  # mol/L
+
+[simulation.ions.targets.negative_ion]
+desired_count  = 3  # = desired_count + solute_charge
+```
+
+* Wurden explizite Targets angegeben, ignoriert das System `simulation.ions.salt_concentration` und den klassischen Randabstand `simulation.box.edge_nm` (es wird eine Warnung im Log ausgegeben).
+* Wird `enforce_neutrality = true` gesetzt, prüft der Loader unmittelbar beim Laden der Snapshot-TOML, ob `N_pos - N_neg + q_solute = 0`. Fehlende Gegenionen werden aus dem Soluten-Ladungszustand ergänzt; widersprüchliche Angaben führen zu einem Fehler mit Korrekturvorschlag.
+* Ohne explizite `negative_ion`-Angabe und aktivierter Neutralität ergänzt Electrofit automatisch `desired_count = positive_count + q_solute`. Negative Resultate schlagen fehl.
+
+### Abgeleitete Parameter & Logging
+
+Beim Laden einer Konfiguration wird nun ein `DerivedSimulation`-Objekt erzeugt und in `cfg.simulation.derived` hinterlegt. Im Log erscheinen u. a. folgende Zeilen, die das Laufzeitverhalten widerspiegeln:
+
+```
+[config][derived] Ion mode: target (enforce_neutrality=True)
+[config][derived] Target counts -> NA: 12, CL: 3
+[config][derived] Target concentration 0.15 mol/L -> volume 132.843 nm^3
+[config][derived] Box lengths (nm): 5.102 x 5.102 x 5.102 for type 'cubic'
+```
+
+Der GROMACS-Adapter nutzt dieses Objekt, erstellt explizite Boxmaße (`editconf -box …`) und ruft `genion` mit `-np/-nn`, sodass spätere Schritte exakt die gewünschte Ionenzahl vorfinden.
+
+---
+
 ## 4. Modul- & Funktionsindex (Kurzzusammenfassung)
 
 Nur wichtige / öffentliche oder stark genutzte Funktionen; Hilfsfunktionen im Code näher dokumentieren (In-Code Docstrings ausbaubar).

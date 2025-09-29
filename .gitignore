@@ -40,4 +40,6 @@ htmlcov/
 
 # Directory for potential rerun
 ip6-rerun/
+ip6-run/
 figures/
+test_molbar/

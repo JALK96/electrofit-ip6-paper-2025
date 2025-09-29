@@ -1,6 +1,8 @@
+
 # packages/electrofit/src/electrofit/config/loader.py
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, is_dataclass, fields
 from pathlib import Path
 import typing as t
@@ -11,6 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore
 
 """TOML configuration loader (legacy .ef fallback removed)."""
+
+if t.TYPE_CHECKING:  # pragma: no cover - typing only
+    from electrofit.simulation.ions import DerivedSimulation
 
 # -----------------
 # Dataclass schema
@@ -26,7 +31,7 @@ class ProjectSection:
     adjust_symmetry: bool = False
     ignore_symmetry: bool = False
     atom_type: str | None = None
-    calculate_group_average: bool = False 
+    calculate_group_average: bool = False
 
 @dataclass
 class PathsSection:
@@ -52,10 +57,22 @@ class SimulationBoxSection:
     edge_nm: float = 1.2
 
 @dataclass
+class IonTargetSection:
+    desired_count: int | None = None
+    concentration: float | None = None
+
+@dataclass
+class IonTargetsSection:
+    positive_ion: IonTargetSection = field(default_factory=IonTargetSection)
+    negative_ion: IonTargetSection = field(default_factory=IonTargetSection)
+
+@dataclass
 class SimulationIonsSection:
     cation: str = "NA"
     anion: str = "CL"
-    concentration: float = 0.15
+    salt_concentration: float | None = None
+    enforce_neutrality: bool = True
+    targets: IonTargetsSection | None = field(default_factory=IonTargetsSection)
 
 @dataclass
 class SimulationSection:
@@ -63,7 +80,7 @@ class SimulationSection:
     ions: SimulationIonsSection = field(default_factory=SimulationIonsSection)
     # Canonical location for forcefield selection (folder name with .ff)
     forcefield: str = "amber14sb.ff"
-
+    derived: "DerivedSimulation | None" = None
 
 @dataclass
 class Config:
@@ -82,6 +99,7 @@ def _load_toml(path: Path) -> dict:
     with path.open("rb") as f:
         return tomllib.load(f)
 
+
 def _deep_merge(base: dict, override: dict) -> dict:
     out = dict(base)
     for k, v in override.items():
@@ -90,6 +108,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             out[k] = v
     return out
+
 
 def _merge_into_dataclass(section, payload: dict):
     """Recursively merge a dict into a (possibly nested) dataclass instance."""
@@ -136,6 +155,7 @@ def dump_config(cfg: "Config", log_fn=print, header: bool = True):
     if header:
         log_fn("[config] -- end full config dump --")
 
+
 def _infer_molecule_name_from_context(ctx: Path, project_root: Path) -> str | None:
     """
     Try to infer the molecule folder name from a context path located under either:
@@ -168,6 +188,7 @@ def _infer_molecule_name_from_context(ctx: Path, project_root: Path) -> str | No
         p = p.parent
     return None
 
+
 # -----------------
 # Loader
 # -----------------
@@ -180,6 +201,7 @@ def load_config(
 ) -> Config:
     root = Path(project_root).resolve()
     data: dict = {}
+    compatibility_notes: list[str] = []
 
     ctx_path: Path | None = Path(context_dir).resolve() if context_dir else None
     mol_name: str | None = molecule_name
@@ -227,8 +249,20 @@ def load_config(
             ordered_unique.append(p)
             seen.add(p)
 
+    logger = logging.getLogger(__name__)
+
     for p in ordered_unique:
         payload = _load_toml(p)
+        # Compatibility shims are easier to handle before merging
+        sim_payload = payload.get("simulation")
+        if isinstance(sim_payload, dict):
+            ions_payload = sim_payload.get("ions")
+            if isinstance(ions_payload, dict):
+                if "concentration" in ions_payload and "salt_concentration" not in ions_payload:
+                    ions_payload["salt_concentration"] = ions_payload.pop("concentration")
+                    compatibility_notes.append(
+                        f"[config][compat] {p}: 'simulation.ions.concentration' is deprecated; use 'salt_concentration'."
+                    )
         data = _deep_merge(data, payload)
 
     # If no TOML data found we simply return defaults (no legacy .ef fallback).
@@ -250,5 +284,27 @@ def load_config(
 
     if mol_name and not cfg.project.molecule_name:
         cfg.project.molecule_name = mol_name
+
+    for note in compatibility_notes:
+        logger.warning(note)
+
+    # Derive simulation settings (ion counts, volumes, etc.)
+    try:
+        from electrofit.simulation.ions import derive_simulation_settings
+
+        derived = derive_simulation_settings(
+            cfg.simulation.box,
+            cfg.simulation.ions,
+            cfg.project.charge or 0,
+        )
+        cfg.simulation.derived = derived
+        for line in derived.log_lines:
+            logger.info(line)
+        for warn in derived.warnings:
+            logger.warning(warn)
+    except ImportError:  # pragma: no cover - safety if module missing
+        logger.debug("[config] ion derivation helper unavailable; skipping derived summary")
+    except Exception as exc:
+        raise ValueError(f"Ion configuration error: {exc}") from exc
 
     return cfg

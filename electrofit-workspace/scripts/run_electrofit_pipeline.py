@@ -312,16 +312,11 @@ def run_step3(project: Path, config: Path | None = None, molecule: str | None = 
             logging.debug("[step3] dump per-run config failed", exc_info=True)
 
         sim = getattr(cfg_run, "simulation", None)
-        ff_attr = getattr(sim, "forcefield", None)
-        ff       = ff_attr or "amber14sb.ff"
-        box_type = getattr(sim, "box_type", None)           or "dodecahedron"
-        d        = getattr(sim, "box_edge_distance", None)  or 1.2
-        cation   = getattr(sim, "cation", None)             or "NA"
-        anion    = getattr(sim, "anion", None)              or "CL"
-        conc     = getattr(sim, "ion_concentration", None)  or 0.15
+        ff_attr = getattr(sim, "forcefield", None) if sim else None
+        ff = ff_attr or "amber14sb.ff"
         runtime_local = getattr(getattr(cfg_run, "gmx", None), "runtime", None)
-        threads     = getattr(runtime_local, "threads", None) if runtime_local else None
-        pin         = getattr(runtime_local, "pin", None) if runtime_local else None
+        threads = getattr(runtime_local, "threads", None) if runtime_local else None
+        pin = getattr(runtime_local, "pin", None) if runtime_local else None
         base_scratch_run = (
             getattr(getattr(cfg_run, "paths", None), "base_scratch_dir", None)
             or "/tmp/electrofit_scratch"
@@ -373,11 +368,8 @@ def run_step3(project: Path, config: Path | None = None, molecule: str | None = 
                 MDP_dir=mdp_dir,
                 base_scratch_dir=base_scratch_run,
                 molecule_name=molecule_name,
-                box_type=box_type,
-                cation=cation,
-                anion=anion,
-                d=str(d),
-                conc=str(conc),
+                simulation=cfg_run.simulation,
+                derived=getattr(cfg_run.simulation, 'derived', None),
                 ff=ff,
                 threads=threads,
                 pin=pin,

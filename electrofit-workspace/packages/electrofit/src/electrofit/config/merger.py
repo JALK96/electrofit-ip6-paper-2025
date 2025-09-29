@@ -97,7 +97,11 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 RESTRICTED_DEFAULT = {
     'project.molecule_name',
     'project.charge',
-    'simulation.ions.concentration',
+    'simulation.ions.salt_concentration',
+    'simulation.ions.targets.positive_ion.desired_count',
+    'simulation.ions.targets.positive_ion.concentration',
+    'simulation.ions.targets.negative_ion.desired_count',
+    'simulation.ions.enforce_neutrality',
 }
 
 
