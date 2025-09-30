@@ -18,6 +18,7 @@ Date  : 2025-07-30
 """
 
 from __future__ import annotations
+import json
 import os
 import logging
 import pathlib
@@ -76,7 +77,8 @@ def analyse_one_microstate(
         dest_dir : pathlib.Path,
         r_cut_nm: float = RCUTOFF_NM,
         rdf_y_max_global: float = None,
-        plot_projection: bool = False
+        plot_projection: bool = False,
+        precomputed_rdf: dict[str, Tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     """
     For a single trajectory/topology pair:
@@ -174,9 +176,23 @@ def analyse_one_microstate(
     rdf_png = dest_dir / "rdf_Na_periphO.pdf"
     # global y max evaluated once (see outcommentd code below in main function)
     if rdf_y_max_global is not None:
-        plot_rdf_periphO_Na(u, out_png=rdf_png, r_max=1.2, nbins=240, y_max_global=rdf_y_max_global)
+        plot_rdf_periphO_Na(
+            u,
+            out_png=rdf_png,
+            r_max=1.2,
+            nbins=240,
+            y_max_global=rdf_y_max_global,
+            rdf_results_override=precomputed_rdf,
+        )
     else:
-        plot_rdf_periphO_Na(u, out_png=rdf_png, r_max=1.2, nbins=240, y_max_global=1800.0)
+        plot_rdf_periphO_Na(
+            u,
+            out_png=rdf_png,
+            r_max=1.2,
+            nbins=240,
+            y_max_global=1800.0,
+            rdf_results_override=precomputed_rdf,
+        )
 
     logging.info("Finished %s", dest_dir.parent.name)
 
@@ -189,6 +205,7 @@ def main(
     determine_global_y: bool = False,
     rdf_y_max: float | None = None,
     plot_projection: bool = False,
+    rdf_data_path: str | None = None,
 ) -> None:
     """Run coordination analysis across micro-states.
 
@@ -204,76 +221,141 @@ def main(
         If provided, use this as the RDF y-limit (overrides scanning).
     plot_projection : bool
         If True, also generate 2D/3D network projection snapshots.
+    rdf_data_path : str | None
+        Optional cache file for RDF data. When supplied, the command can reuse
+        previously computed RDF curves (and the corresponding global y-limit)
+        instead of recomputing them from scratch. When combined with
+        ``--determine-global-y`` the cache is refreshed/created.
     """
     project_path = pathlib.Path(project_dir).resolve()
     process_dir  = project_path / subdir
     print(f"Process Dir: {process_dir}")
-    
 
-    Y_GLOBAL_MAX = None
+    rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
+    rdf_cache_path = pathlib.Path(rdf_data_path).resolve() if rdf_data_path else None
+
+    if rdf_cache_path and not rdf_cache_path.exists() and not (determine_global_y and rdf_y_max is None):
+        raise FileNotFoundError(f"RDF cache {rdf_cache_path} not found. Run with --determine-global-y to create it.")
+
+    Y_GLOBAL_MAX: float | None = None
+
+    # ---------------------------------------------------------------------------
+    # Attempt to reuse a cache if provided
+    # ---------------------------------------------------------------------------
+    if rdf_cache_path and rdf_cache_path.exists():
+        with rdf_cache_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        meta = payload.get("meta", {})
+        try:
+            Y_GLOBAL_MAX = float(meta["global_y"])
+        except KeyError as exc:
+            raise KeyError(f"Missing 'global_y' in RDF cache {rdf_cache_path}") from exc
+        cached_data = payload.get("data", {})
+        rdf_cache_arrays = {
+            micro: {
+                label: (
+                    np.asarray(entry["r"], dtype=float),
+                    np.asarray(entry["g"], dtype=float),
+                )
+                for label, entry in micro_dict.items()
+            }
+            for micro, micro_dict in cached_data.items()
+        }
+        msg = f"Loaded RDF cache from {rdf_cache_path} (global y-limit = {Y_GLOBAL_MAX:.2f})."
+        logging.info(msg)
+        print(msg)
+        determine_global_y = False  # cache already contains the scan results
+
     if determine_global_y and rdf_y_max is None:
-        # ---------------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # 0.  parameters for the scan
-        # ---------------------------------------------------------------------------
-        r_max_nm = 1.2          # same value you use in the plotting function
-        nbins    = 240
-        Y_GLOBAL_MAX = 0.0      # will hold the global peak height
+        # -----------------------------------------------------------------------
+        r_max_nm = 1.2
+        nbins = 240
+        Y_GLOBAL_MAX = 0.0
+        rdf_cache_arrays = {}
 
-        # ---------------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # 1.  loop over all micro-state directories
-        # ---------------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         for microstate in sorted(process_dir.iterdir()):
+            if not microstate.is_dir():
+                continue
+
+            run_dir = microstate / RUN_DIR_NAME
+            if not run_dir.is_dir():
+                logging.debug("Skipping %s (no %s)", microstate.name, RUN_DIR_NAME)
+                continue
+
+            traj = run_dir / "md_center.xtc"
+            top = run_dir / "md.tpr"
+            if not traj.is_file() or not top.is_file():
+                logging.warning("Missing files in %s – skipped.", run_dir)
+                continue
+
             dest_dir = microstate / PLOT_DIR_NAME
             dest_dir.mkdir(exist_ok=True)
             logfile = dest_dir / "NaP_coordination.log"
             setup_logging(logfile)
 
-            if not microstate.is_dir():
-                continue                                                 # skip files
-            
-            run_dir = microstate / RUN_DIR_NAME
-            if not run_dir.is_dir():
-                logging.debug("Skipping %s (no %s)", microstate.name, RUN_DIR_NAME)
-                continue
-            
-            traj = run_dir / "md_center.xtc"
-            top  = run_dir / "md.tpr"
-            if not traj.is_file() or not top.is_file():
-                logging.warning("Missing files in %s – skipped.", run_dir)
-                continue                                         # nothing to analyse
-            
-            # -----------------------------------------------------------------------
-            # 2.  build an MDAnalysis universe (no need to load the full trajectory)
-            # -----------------------------------------------------------------------
             u = mda.Universe(top, traj, topology_format="TPR")
             na_ag = u.select_atoms("name NA")
 
-            # -----------------------------------------------------------------------
-            # 3.  loop over the six phosphates and update the global max
-            # -----------------------------------------------------------------------
+            micro_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
             for label in PHOS_LABELS:
-                oxy_ag = u.select_atoms("resname I* and name " +
-                                        " ".join(PHOS_OXYGENS[label]))
+                oxy_ag = u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
+                rdf = InterRDF(na_ag, oxy_ag, range=(0, r_max_nm * 10), nbins=nbins)
+                rdf.run()
 
-                rdf = InterRDF(na_ag, oxy_ag,
-                            range=(0, r_max_nm * 10),  # Å
-                            nbins=nbins)
-                rdf.run()                              # one frame → fast
+                r_nm = rdf.bins / 10.0
+                g_raw = rdf.rdf
+                micro_cache[label] = (r_nm.copy(), g_raw.copy())
 
-                peak_height = (rdf.rdf * 3).max()      # ×3 → per-phosphate
-                Y_GLOBAL_MAX = max(Y_GLOBAL_MAX, peak_height)
+                peak_height = (g_raw * 3).max()
+                Y_GLOBAL_MAX = max(Y_GLOBAL_MAX, float(peak_height))
 
-    # add a little head-room so the tallest peak is not cut off
-    if Y_GLOBAL_MAX is not None:
-        Y_GLOBAL_MAX *= 1.05
-        print(f"Global y-limit to use in all figures: {Y_GLOBAL_MAX:.2f}")
-    elif rdf_y_max is not None:
-        Y_GLOBAL_MAX = rdf_y_max
-        print(f"Using user-provided RDF y-limit: {Y_GLOBAL_MAX:.2f}")
-    else:
-        # Fall back: if neither scanning nor override, pick a default
-        Y_GLOBAL_MAX = 1800.0
-        print("No global y-limit determined; falling back to default = 1800.0")
+            rdf_cache_arrays[microstate.name] = micro_cache
+
+        if rdf_cache_arrays:
+            Y_GLOBAL_MAX *= 1.05
+            msg = f"Global y-limit to use in all figures: {Y_GLOBAL_MAX:.2f}"
+            logging.info(msg)
+            print(msg)
+
+            if rdf_cache_path:
+                payload = {
+                    "meta": {
+                        "version": 1,
+                        "r_max": r_max_nm,
+                        "nbins": nbins,
+                        "global_y": Y_GLOBAL_MAX,
+                    },
+                    "data": {
+                        micro: {
+                            label: {
+                                "r": r_vals.tolist(),
+                                "g": g_vals.tolist(),
+                            }
+                            for label, (r_vals, g_vals) in micro_dict.items()
+                        }
+                        for micro, micro_dict in rdf_cache_arrays.items()
+                    },
+                }
+                rdf_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with rdf_cache_path.open("w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                logging.info("Saved RDF cache to %s", rdf_cache_path)
+        else:
+            logging.warning("No microstates processed during global y scan; using default y-limit.")
+            Y_GLOBAL_MAX = None
+
+    if Y_GLOBAL_MAX is None:
+        if rdf_y_max is not None:
+            Y_GLOBAL_MAX = rdf_y_max
+            logging.info(f"Using user-provided RDF y-limit: {Y_GLOBAL_MAX:.2f}")
+        else:
+            Y_GLOBAL_MAX = 1800.0
+            logging.warning("No global y-limit determined; falling back to default = 1800.0")
 
     for microstate in sorted(process_dir.iterdir()):
         if not microstate.is_dir():
@@ -298,6 +380,9 @@ def main(
         setup_logging(logfile)
 
         effective_y_max = rdf_y_max if rdf_y_max is not None else Y_GLOBAL_MAX
+        rdf_override = None
+        if rdf_cache_arrays and microstate.name in rdf_cache_arrays:
+            rdf_override = rdf_cache_arrays[microstate.name]
         analyse_one_microstate(
             traj_file = traj,
             top_file  = top,
@@ -305,6 +390,7 @@ def main(
             r_cut_nm  = RCUTOFF_NM,
             rdf_y_max_global = effective_y_max,
             plot_projection = plot_projection,
+            precomputed_rdf = rdf_override,
         )
 
 if __name__ == "__main__":
@@ -334,6 +420,12 @@ if __name__ == "__main__":
         help="Override RDF y-limit with a fixed value (skips scanning).",
     )
     parser.add_argument(
+        "--rdf-data",
+        default=None,
+        help="Path to an RDF cache file (JSON). If present, reuse cached curves;"
+             " with --determine-global-y the cache is refreshed/created.",
+    )
+    parser.add_argument(
         "--plot-projection",
         action="store_true",
         help="Also generate 2D/3D network projection snapshots.",
@@ -346,4 +438,5 @@ if __name__ == "__main__":
         args.determine_global_y,
         args.rdf_y_max,
         args.plot_projection,
+        args.rdf_data,
     )

@@ -104,6 +104,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         determine_global_y=args.determine_global_y,
         rdf_y_max=args.rdf_y_max,
         plot_projection=args.plot_projection,
+        rdf_data_path=args.rdf_data,
     )
 
 
@@ -263,6 +264,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--plot-projection",
         action="store_true",
         help="Also generate 2D/3D network projection snapshots.",
+    )
+    p_coord.add_argument(
+        "--rdf-data",
+        default=None,
+        help="Path to an RDF cache file (JSON). Reuse or refresh cached RDF curves.",
     )
     p_coord.set_defaults(func=_cmd_coordination)
 

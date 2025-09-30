@@ -132,6 +132,10 @@ def plot_rdf_periphO_Na(
         nbins: int   = 240,      # → dr ≈ 0.005 nm
         *,
         y_max_global: Optional[float] = None,
+        hide_y_label: bool = True,
+        hide_y_ticklabels: bool = True,
+        show_shell_cutoff: bool = False,
+        rdf_results_override: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> None:
     """Plot Na⁺–peripheral‑oxygen RDFs for **one** microstate.
 
@@ -152,143 +156,176 @@ def plot_rdf_periphO_Na(
         *Upper* limit of the y‑axis for **all** figures.  Compute this once
         across the full data set and pass it to every call.  If *None*, an
         exception is raised so the user does not forget.
+    hide_y_label : bool, optional
+        When `True`, omit the phosphate label text from the y-axis.
+    hide_y_ticklabels : bool, optional
+        When `True`, suppress y tick labels (tick marks remain visible).
+    show_shell_cutoff : bool, optional
+        Toggle drawing the green first-shell cutoff guide.
+    rdf_results_override : dict | None, optional
+        Precomputed RDF arrays in the form ``{label: (r_nm, g_raw)}``. When
+        provided, the expensive InterRDF computation is skipped and these
+        arrays are used directly (``g_raw`` should be the raw RDF, i.e. before
+        multiplying by 3 to obtain per-phosphate curves).
     """
 
     if y_max_global is None:
         raise ValueError("plot_rdf_periphO_Na requires *y_max_global* so all figures share the same scale.")
 
-    # ---- compute RDFs -------------------------------------------------------
-    na_ag = u.select_atoms("name NA")
-    periph_dict = {
-        label: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-        for label in PHOS_LABELS
+    font_rc = {
+        "font.family": "serif",
+        "font.serif": ["Nimbus Roman", "Nimbus Roman No9 L", "Times New Roman", "Times"],
     }
 
-    rdf_results = {}
-    for label, oxy_ag in periph_dict.items():
-        rdf = InterRDF(na_ag, oxy_ag, range=(0, r_max * 10), nbins=nbins)
-        rdf.run()
-        rdf_results[label] = (rdf.bins / 10.0, rdf.rdf)  # convert Å → nm
+    with plt.rc_context(font_rc):
+        # ---- compute RDFs ---------------------------------------------------
+        na_ag = u.select_atoms("name NA")
+        periph_dict = {
+            label: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
+            for label in PHOS_LABELS
+        }
 
-    # ---- figure & axes ------------------------------------------------------
-    sns.set_context("talk")
-    n = len(PHOS_LABELS)
-    fig, axes = plt.subplots(n, 1, figsize=(6, 1.2 * n), sharex=True, sharey=True)
+        rdf_results: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        if rdf_results_override is None:
+            for label, oxy_ag in periph_dict.items():
+                rdf = InterRDF(na_ag, oxy_ag, range=(0, r_max * 10), nbins=nbins)
+                rdf.run()
+                rdf_results[label] = (rdf.bins / 10.0, rdf.rdf)  # convert Å → nm
+        else:
+            missing = [lab for lab in PHOS_LABELS if lab not in rdf_results_override]
+            if missing:
+                raise ValueError(f"rdf_results_override missing labels: {', '.join(missing)}")
+            for label in PHOS_LABELS:
+                r_vals, g_vals = rdf_results_override[label]
+                rdf_results[label] = (np.asarray(r_vals, dtype=float),
+                                      np.asarray(g_vals, dtype=float))
 
-    # ---- binary code → colours ---------------------------------------------
-    try:
-        binary_code = out_png.parents[2].name
-        if binary_code.startswith("IP_"):
-            binary_code = binary_code[3:]
-    except Exception:
-        binary_code = "000000"
-    if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
-        raise ValueError(f"Unexpected binary code '{binary_code}' in output path")
-    colours = ["blue" if bit == "1" else "black" for bit in binary_code]
+        # ---- figure & axes --------------------------------------------------
+        sns.set_context("talk")
+        n = len(PHOS_LABELS)
+        #fig, axes = plt.subplots(n, 1, figsize=(6, 1.2 * n), sharex=True, sharey=True)
+        fig, axes = plt.subplots(n, 1, figsize=(4.5, 1.2 * n), sharex=True, sharey=True)
 
-    # ---- constants for inset -----------------------------------------------
-    X_LOWER, X_UPPER = 0, 1.2     # nm
+        # ---- binary code → colours -----------------------------------------
+        try:
+            binary_code = out_png.parents[2].name
+            if binary_code.startswith("IP_"):
+                binary_code = binary_code[3:]
+        except Exception:
+            binary_code = "000000"
+        if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
+            raise ValueError(f"Unexpected binary code '{binary_code}' in output path")
+        colours = ["blue" if bit == "1" else "black" for bit in binary_code]
 
-    # ---- loop over P1–P6 ----------------------------------------------------
-    for ax, (label, col) in zip(axes, zip(PHOS_LABELS, colours)):
-        r, g = rdf_results[label]
-        g_per_phos = g * 3                    # 3 O atoms → per phosphate
+        # ---- constants for inset -------------------------------------------
+        X_LOWER, X_UPPER = 0.32, 1.2     # nm
 
-        # --- determine first‑shell boundary ---------------------------------
-        shell_end = first_shell_end(r, g_per_phos)
-        if not np.isnan(shell_end):
-            # visual guide: green dotted line at first minimum
-            ax.axvline(shell_end, color="green", ls=":", lw=1.0)
-            ax.text(shell_end, 0.95 * y_max_global,
-                    f"{shell_end:.2f} nm",
-                    rotation=90, va="top", ha="right",
-                    color="green", fontsize=8)
-            logging.info("First‑shell end for %s: %.3f nm", label, shell_end)
+        # ---- loop over P1–P6 ------------------------------------------------
+        for ax, (label, col) in zip(axes, zip(PHOS_LABELS, colours)):
+            r, g_raw = rdf_results[label]
+            g_per_phos = g_raw * 3                    # 3 O atoms → per phosphate
 
-        if col == "blue":
-            ax.fill_between(r, g_per_phos, 0.0, color=col, alpha=0.3)
-        ax.plot(r, g_per_phos, lw=1.2, color="black")
-        ax.axvline(RCUTOFF_NM, ymax=0.8, color="black", ls="--", lw=1.0)
+            # --- determine first‑shell boundary -----------------------------
+            shell_end = first_shell_end(r, g_per_phos)
+            if show_shell_cutoff and not np.isnan(shell_end):
+                # visual guide: green dotted line at first minimum
+                ax.axvline(shell_end, color="green", ls=":", lw=1.0)
+                ax.text(shell_end, 0.95 * y_max_global,
+                        f"{shell_end:.2f} nm",
+                        rotation=90, va="top", ha="right",
+                        color="green", fontsize=8)
+                logging.info("First‑shell end for %s: %.3f nm", label, shell_end)
 
-        # global y‑scale ------------------------------------------------------
-        ax.set_ylim(0.0, y_max_global)
-
-        # y‑axis label --------------------------------------------------------
-        ax.set_ylabel(PHOS_LABELS_CORRECTED[PHOS_LABELS.index(label)],
-                      rotation=0, labelpad=40, va="center")
-        ax.yaxis.set_major_locator(plt.MaxNLocator(2))
-        if ax is not axes[-1]:
-            ax.tick_params(labelbottom=False)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-
-        # coordination number -------------------------------------------------
-        mask_cn = r <= RCUTOFF_NM
-        vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
-        rho_Na  = len(na_ag) / vol_nm3
-        coord_num = 4.0 * np.pi * rho_Na * np.trapz(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
-        ax.text(0.03, 0.8, f"{coord_num:.2f}", transform=ax.transAxes,
-                ha="left", va="top", fontsize=14, color=col, alpha=0.7)
-
-        # --------  OPTIONAL INSET for "blue" (bit == 1), "black" (bit ==0) -----------------
-        if col == "blue" or col == "black":
-            # restrict data to the desired x-window
-            mask_inset = (r >= X_LOWER) & (r <= X_UPPER)
-            r_inset    = r[mask_inset]
-            g_inset    = (g*3)[mask_inset]        # already per-phosphate
-
-            # create inset: upper-right corner (loc='upper right')
-            axins = inset_axes(ax,
-                               width = 1.5,   # 35 % of parent
-                               height = 0.5,
-                               loc = "upper right",
-                               borderpad = 1.0)
-
-            # plot and format
             if col == "blue":
-                axins.fill_between(r_inset, g_inset, 0,
-                               color=col, alpha=0.4)
-            axins.plot(r_inset, g_inset, lw=1.0, color="black")
+                ax.fill_between(r, g_per_phos, 0.0, color=col, alpha=0.3)
+            ax.plot(r, g_per_phos, lw=1.2, color="black")
+            ax.axvline(RCUTOFF_NM, ymax=0.8, color="black", ls="--", lw=1.0)
 
-            # set limits so curve fills inset tightly
-            axins.set_xlim(X_LOWER, X_UPPER)
-            y_min, y_max = g_inset.min(), g_inset.max()
-            x_min, x_max = r_inset.min(), r_inset.max()
-            axins.set_ylim(y_min*0.98, y_max*1.02)
+            # global y‑scale --------------------------------------------------
+            ax.set_ylim(0.0, y_max_global)
 
-            # --- show only the top (maximum) y tick ---------------------------
-            axins.set_yticks([y_max])                 # one tick at ymax
-            axins.set_yticklabels([f"{y_max:.0f}"], fontsize=12)   # optional: format label
-            axins.tick_params(axis="y",               # keep the tick mark
-                            which="both",
-                            direction="out",
-                            left=False,
-                            right=False,
-                            labelright=False)
-            if ax is not axes[0]:
-                axins.tick_params(axis="x",               # hide x ticks/labels
-                                bottom=False,
-                                labelbottom=False)
+            # y‑axis label ----------------------------------------------------
+            if not hide_y_label:
+                ax.set_ylabel(PHOS_LABELS_CORRECTED[PHOS_LABELS.index(label)],
+                              rotation=0, labelpad=40, va="center")
             else:
-                axins.set_xticks([x_min, x_max])                 # one tick at ymax
-                axins.set_xticklabels([f"{x_min:.2f}", f"{x_max:.2f}"], fontsize=12)   # optional: format label
-                axins.tick_params(axis="x",               # show x ticks/labels
-                                top=False,
-                                labeltop=True,
-                                bottom=False,
-                                labelbottom=False)
-        
-        #ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))  # scientific notation for large y-values
+                ax.set_ylabel("")
+            ax.yaxis.set_major_locator(plt.MaxNLocator(2))
+            if hide_y_ticklabels:
+                ax.set_yticklabels([])
+                ax.tick_params(labelleft=False)
+            if ax is not axes[-1]:
+                ax.tick_params(labelbottom=False)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
 
-    # ---- common labels & title ---------------------------------------------
-    axes[-1].set_xlabel("r / nm")
-    fig.suptitle(binary_code, fontsize=20)
+            # coordination number ---------------------------------------------
+            mask_cn = r <= RCUTOFF_NM
+            vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
+            rho_Na  = len(na_ag) / vol_nm3
+            coord_num = 4.0 * np.pi * rho_Na * np.trapezoid(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
+            ax.text(0.03, 0.8, f"{coord_num:.2f}", transform=ax.transAxes,
+                    ha="left", va="top", fontsize=20, color=col, alpha=0.7)
 
-    plt.tight_layout()
-    fig.subplots_adjust(hspace=0.1)
-    fig.savefig(out_png, dpi=300)
-    plt.close(fig)
-    logging.info("RDF figure written to %s", out_png)
+            # --------  OPTIONAL INSET for "blue" (bit == 1), "black" (bit ==0) ---------
+            if col == "blue" or col == "black":
+                # restrict data to the desired x-window
+                mask_inset = (r >= X_LOWER) & (r <= X_UPPER)
+                r_inset    = r[mask_inset]
+                g_inset    = g_per_phos[mask_inset]
+
+                # create inset: upper-right corner (loc='upper right')
+                axins = inset_axes(ax,
+                                   width = 1.5,   # 35 % of parent
+                                   height = 0.5,
+                                   loc = "upper right",
+                                   borderpad = 1.0)
+
+                # plot and format
+                if col == "blue":
+                    axins.fill_between(r_inset, g_inset, 0,
+                                   color=col, alpha=0.4)
+                axins.plot(r_inset, g_inset, lw=1.0, color="black")
+
+                # set limits so curve fills inset tightly
+                axins.set_xlim(X_LOWER, X_UPPER)
+                y_min, y_max = g_inset.min(), g_inset.max()
+                x_min, x_max = r_inset.min(), r_inset.max()
+                axins.set_ylim(y_min*0.98, y_max*1.02)
+
+                # --- show only the top (maximum) y tick -----------------------
+                axins.set_yticks([y_max])                 # one tick at ymax
+                axins.set_yticklabels([f"{y_max:.0f}"], fontsize=18)   # optional: format label
+                axins.tick_params(axis="y",               # keep the tick mark
+                                which="both",
+                                direction="out",
+                                left=False,
+                                right=False,
+                                labelright=False)
+                if ax is not axes[0]:
+                    axins.tick_params(axis="x",               # hide x ticks/labels
+                                    bottom=False,
+                                    labelbottom=False)
+                else:
+                    axins.set_xticks([x_min, x_max])                 # one tick at ymax
+                    axins.set_xticklabels([f"{x_min:.2f}", f"{x_max:.2f}"], fontsize=18)   # optional: format label
+                    axins.tick_params(axis="x",               # show x ticks/labels
+                                    top=False,
+                                    labeltop=True,
+                                    bottom=False,
+                                    labelbottom=False)
+
+            #ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))  # scientific notation for large y-values
+
+        # ---- common labels & title -----------------------------------------
+        axes[-1].set_xlabel("r / nm", fontsize=18)
+        fig.suptitle(binary_code, fontsize=26)
+
+        plt.tight_layout()
+        fig.subplots_adjust(hspace=0.1)
+        fig.savefig(out_png, dpi=300)
+        plt.close(fig)
+        logging.info("RDF figure written to %s", out_png)
 
 
 # ┃    2-D PROJECTION  PERPENDICULAR  TO  A  REFERENCE PLANE      ┃

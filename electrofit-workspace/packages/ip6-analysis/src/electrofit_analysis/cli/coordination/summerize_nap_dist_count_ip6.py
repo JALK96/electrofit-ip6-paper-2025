@@ -328,6 +328,12 @@ def summarize_boxplot_generic(root_dir, output_dir, metric_name, ylabel, data_lo
         ymin, ymax = min(whisk_lows), max(whisk_highs)
         pad = 0.05 * (ymax - ymin if ymax > ymin else 1.0)
         ymin -= pad; ymax += pad
+        
+        # Set fixed y-limits for coordination counts (this is a global metric for the project: /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/ip6-run)
+        if metric_name == "coordcount":
+            ymin = -0.3
+            ymax = 6.3
+
         print(f"  ▶ y-range = [{ymin:.3g}, {ymax:.3g}]")
 
         n = len(patterns)
