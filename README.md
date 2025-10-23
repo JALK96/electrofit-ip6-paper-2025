@@ -54,4 +54,4 @@ and optionally
 pip install -e ./packages/ip6-analysis
 ```
 
-to install the IP6 analysis package, to reproduce the analysis presented in the paper...to be continued. 
+to install the IP6 analysis package, to reproduce the analysis presented in the paper... (to be continued). 
