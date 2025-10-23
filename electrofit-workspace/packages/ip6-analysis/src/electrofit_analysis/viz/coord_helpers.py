@@ -188,7 +188,7 @@ def plot_rdf_periphO_Na(
         rdf_results: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         if rdf_results_override is None:
             for label, oxy_ag in periph_dict.items():
-                rdf = InterRDF(na_ag, oxy_ag, range=(0, r_max * 10), nbins=nbins)
+                rdf = InterRDF(oxy_ag, na_ag, range=(0, r_max * 10), nbins=nbins)
                 rdf.run()
                 rdf_results[label] = (rdf.bins / 10.0, rdf.rdf)  # convert Å → nm
         else:
@@ -263,6 +263,7 @@ def plot_rdf_periphO_Na(
             mask_cn = r <= RCUTOFF_NM
             vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
             rho_Na  = len(na_ag) / vol_nm3
+            logging.info(f"Volume: {vol_nm3:.2f} nm³, Density of Na⁺: {rho_Na:.2f} nm⁻³")
             coord_num = 4.0 * np.pi * rho_Na * np.trapezoid(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
             ax.text(0.03, 0.8, f"{coord_num:.2f}", transform=ax.transAxes,
                     ha="left", va="top", fontsize=20, color=col, alpha=0.7)

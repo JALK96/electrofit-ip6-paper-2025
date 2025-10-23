@@ -304,7 +304,7 @@ def main(
             micro_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
             for label in PHOS_LABELS:
                 oxy_ag = u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-                rdf = InterRDF(na_ag, oxy_ag, range=(0, r_max_nm * 10), nbins=nbins)
+                rdf = InterRDF(oxy_ag, na_ag,range=(0, r_max_nm * 10), nbins=nbins)
                 rdf.run()
 
                 r_nm = rdf.bins / 10.0

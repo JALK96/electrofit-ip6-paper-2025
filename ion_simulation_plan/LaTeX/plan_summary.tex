@@ -1,0 +1,91 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{siunitx}
+\sisetup{
+  table-number-alignment = center,
+  round-mode = places,
+  round-precision = 3
+}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\title{IP\textsubscript{6} Ion Simulation Planning Summary}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Methodology}
+All estimates are derived from the historical IP\textsubscript{6} production runs in \texttt{ip6-run/process}. The workflow executed proceeds as follows:
+\begin{enumerate}
+    \item \textbf{Density benchmark.} For every available reference run we read the solvated coordinate file to obtain the box volume $V_{\mathrm{ref}}$ and atom count $N_{\mathrm{ref}}$. The median atomic number density is
+    \begin{equation}
+        \rho_{\mathrm{med}} = \operatorname{median}\left(\frac{N_{\mathrm{ref}}}{V_{\mathrm{ref}}}\right).
+    \end{equation}
+    \item \textbf{Performance benchmark.} From each production log we extract the reported performance in ns/day\footnote{Typical values are around 150 ns/day for a concentration of 150 mM and a number of positive monovalent cations N+ = 12.} and form the product $k = (\mathrm{ns/day}) \times N_{\mathrm{ref}}$. The median of these values, $k_{\mathrm{med}}$, captures the empirical throughput per atom.
+    \item \textbf{Ion targets.} The positive ion count $N_+$ is read from the project configuration of the selected microstate (default: IP\_010101). Neutrality constraints are enforced by adjusting $N_+$ to the smallest value compatible with the solute charge and anion valence. In practice, this adjustment only increases $N_+$ when the requested cation has lower valence than the reference (e.g., Ca$^{2+}$\,$\to$\,Na$^+$); otherwise $N_+$ is unchanged. The corresponding negative ion count can be computed from charge balance.
+    \item \textbf{Box sizing.} For a desired molar concentration $c$ (mol\,L$^{-1}$) we obtain the required solvent volume
+    \begin{equation}
+        V = \frac{N_+ / N_{\mathrm{A}}}{c} \times 10^{24}\ \text{nm}^3,
+    \end{equation}
+    where $N_{\mathrm{A}}$ is Avogadro's number. For the cubic simulation cell this converts to an edge length $L = V^{1/3}$.
+    \item \textbf{Atom count estimate.} The total number of atoms expected for the target concentration is approximated by
+    \begin{equation}
+        N_{\mathrm{atoms}} = \rho_{\mathrm{med}} \times V.
+    \end{equation}
+    \item \textbf{Wall-clock time.} The projected throughput is $\mathrm{ns/day} = k_{\mathrm{med}} / N_{\mathrm{atoms}}$, hence the median wall-clock duration for a production length $t_{\mathrm{sim}}$ (ns) is
+    \begin{equation}
+        T_{\mathrm{wall}} = \frac{t_{\mathrm{sim}}}{\mathrm{ns/day}} = 24 \times \frac{t_{\mathrm{sim}}}{k_{\mathrm{med}} / N_{\mathrm{atoms}}}\ \text{hours}.
+    \end{equation}
+    Slow and fast quartiles are generated in the same manner using the 25\textsuperscript{th} and 75\textsuperscript{th} percentiles of $k$.
+    \item \textbf{Water-model scaling.} All benchmarks were carried out with TIP3P. For TIP4P/2005 we apply a conservative 33\% overhead, i.e.,
+    \begin{equation}
+        T_{\mathrm{wall}}^{(\mathrm{TIP4P/2005})} = \frac{4}{3} T_{\mathrm{wall}}^{(\mathrm{TIP3P})}.
+    \end{equation}
+\end{enumerate}
+Thus, we use the equality $N^{\mathrm{target}}_{\mathrm{atoms}} \times (\mathrm{ns/day})^{\mathrm{target}} = N^{\mathrm{ref}}_{\mathrm{atoms}} \times (\mathrm{ns/day})^{\mathrm{ref}} = \text{const.}$ to scale wall-clock times for different system sizes.
+
+\section{Typical Wall-clock Estimates (default settings)}
+All simulations listed below assume IP\_010101\footnote{Note, the selected microstate only supplies the solute charge, default N+, and box type.}, a production length of \SI{100}{ns}, temperature \SI{310}{K}, and neutrality relative to the default ion counts. The table reports the median (``typical'') wall-clock time for each ion, concentration, and water model combination.
+
+\sisetup{round-mode=places,round-precision=1,scientific-notation=true}
+\begin{table}[h]
+    \footnotesize
+    \centering
+    \begin{tabular}{@{}llS[table-format=3.3, round-precision=1, scientific-notation=false]S[table-format=3.3, round-precision=1, scientific-notation=false]S[scientific-notation=false,round-mode=figures,round-precision=4]S[round-precision=1]S[table-format=3.3, round-precision=1, scientific-notation=false]@{}}
+        \toprule
+        Ion & Water model & {Conc. (mM)} & {Box edge (nm)} & {$N_{\mathrm{atoms}}$} & {Wall time (h)} & {Wall time (d)} \\
+        \midrule
+        Ca\textsuperscript{2+} & TIP3P      & 1.000 & 27.111 & \num{1.945651e6} & 2419.1 & 100.8 \\
+        Ca\textsuperscript{2+} & TIP4P/2005 & 1.000 & 27.111 & \num{1.945651e6} & 3225.5 & 134.4 \\
+        Ca\textsuperscript{2+} & TIP3P      & 2.000 & 21.518 & \num{9.72826e5} & 1209.5 & 50.4 \\
+        Ca\textsuperscript{2+} & TIP4P/2005 & 2.000 & 21.518 & \num{9.72826e5} & 1612.7 & 67.2 \\
+        Ca\textsuperscript{2+} & TIP3P      & 10.000 & 12.584 & \num{1.94565e5} & 241.9 & 10.1 \\
+        Ca\textsuperscript{2+} & TIP4P/2005 & 10.000 & 12.584 & \num{1.94565e5} & 322.5 & 13.4 \\
+        Mg\textsuperscript{2+} & TIP3P      & 0.500 & 34.158 & \num{3.891302e6} & 4838.2 & 201.6 \\
+        Mg\textsuperscript{2+} & TIP4P/2005 & 0.500 & 34.158 & \num{3.891302e6} & 6450.9 & 268.8 \\
+        Mg\textsuperscript{2+} & TIP3P      & 1.000 & 27.111 & \num{1.945651e6} & 2419.1 & 100.8 \\
+        Mg\textsuperscript{2+} & TIP4P/2005 & 1.000 & 27.111 & \num{1.945651e6} & 3225.5 & 134.4 \\
+        Mg\textsuperscript{2+} & TIP3P      & 10.000 & 12.584 & \num{1.94565e5} & 241.9 & 10.1 \\
+        Mg\textsuperscript{2+} & TIP4P/2005 & 10.000 & 12.584 & \num{1.94565e5} & 322.5 & 13.4 \\
+        Na\textsuperscript{+} & TIP3P       & 10.000 & 12.584 & \num{1.94565e5} & 241.9 & 10.1 \\
+        Na\textsuperscript{+} & TIP4P/2005  & 10.000 & 12.584 & \num{1.94565e5} & 322.5 & 13.4 \\
+        Na\textsuperscript{+} & TIP3P       & 140.000 & 5.221 & \num{1.3898e4} & 17.3 & 0.7 \\
+        Na\textsuperscript{+} & TIP4P/2005  & 140.000 & 5.221 & \num{1.3898e4} & 23.0 & 1.0 \\
+        Na\textsuperscript{+} & TIP3P       & 300.000 & 4.050 & \num{6.486e3} & 8.1 & 0.3 \\
+        Na\textsuperscript{+} & TIP4P/2005  & 300.000 & 4.050 & \num{6.486e3} & 10.8 & 0.5 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Median wall-clock times for the default 18-run matrix (here the cation target was fixed to $N_+=12$).}
+\end{table}
+
+\vspace{1em}
+The cumulative median wall-clock demand for the default plan is:
+\begin{align*}
+    T_{\mathrm{TIP3P}} &= \SI{11637}{h}\ (\approx \SI{485}{d}), \\
+    T_{\mathrm{TIP4P/2005}} &= \SI{15516}{h}\ (\approx \SI{646}{d}), \\
+    T_{\mathrm{combined}} &= \SI{27153}{h}\ (\approx \SI{1131}{d}).
+\end{align*}
+
+\end{document}
