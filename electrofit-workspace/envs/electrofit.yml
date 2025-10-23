@@ -32,4 +32,4 @@ dependencies:
 
   # ---- Local package(s) in editable mode ----
   - pip:
-      - -e ./packages/electrofit
+      - -e ../packages/electrofit

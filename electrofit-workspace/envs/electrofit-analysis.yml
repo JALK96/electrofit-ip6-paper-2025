@@ -41,5 +41,5 @@ dependencies:
 
   # ---- Local packages (editable installs) ----
   - pip:
-      - -e ./packages/electrofit
-      - -e ./packages/ip6-analysis
+      - -e ../packages/electrofit
+      - -e ../packages/ip6-analysis
