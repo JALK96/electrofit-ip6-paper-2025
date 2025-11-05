@@ -19,12 +19,12 @@ STEP_MODULES = {
 }
 
 def _run_module(module: str, project: Path, config: Path | None, rest: list[str]):
-    # Export project path only (old ELECTROFIT_CONFIG_PATH removed)
     os.environ["ELECTROFIT_PROJECT_PATH"] = str(project)
-
     prev_argv = sys.argv
-    # Only pass --project; keep additional arguments
-    sys.argv = [module, "--project", str(project)] + rest
+    args_list = [module, "--project", str(project)]
+    if config is not None:
+        args_list += ["--config", str(config)]
+    sys.argv = args_list + rest
     try:
         runpy.run_module(module, run_name="__main__")
     finally:

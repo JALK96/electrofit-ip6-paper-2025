@@ -1,5 +1,6 @@
 import json
 import sys
+from typing import Dict, Iterable, List, Tuple
 
 def build_connections(atoms, bonds):
     """
@@ -151,3 +152,78 @@ def load_equivalence_groups(equiv_groups_file):
     except Exception as e:
         print(f"Error loading equivalence groups: {e}")
         sys.exit(1)
+
+
+def extract_atom_labels_from_mol2(mol2_file: str) -> List[str]:
+    """Return sequential element labels (e.g. C1, O2) derived from the MOL2 ATOM block."""
+    labels: List[str] = []
+    counts: Dict[str, int] = {}
+    try:
+        with open(mol2_file, "r") as fh:
+            in_atoms = False
+            for raw in fh:
+                line = raw.strip()
+                if line.startswith("@<TRIPOS>ATOM"):
+                    in_atoms = True
+                    continue
+                if not in_atoms:
+                    continue
+                if not line or line.startswith("@<TRIPOS>"):
+                    break
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                atom_type = parts[5]
+                element = ""
+                for ch in atom_type:
+                    if ch.isalpha():
+                        element += ch
+                    else:
+                        break
+                if not element:
+                    raw_name = parts[1]
+                    element = "".join(ch for ch in raw_name if ch.isalpha()) or raw_name
+                element = element.capitalize()
+                counts[element] = counts.get(element, 0) + 1
+                labels.append(f"{element}{counts[element]}")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"MOL2 file '{mol2_file}' not found while extracting labels") from exc
+    return labels
+
+
+def apply_symmetry_to_charges(
+    mol2_file: str,
+    charges: Iterable[float],
+    equivalence_groups: Dict[str, List[str]],
+) -> Tuple[List[float], List[str]]:
+    """Average charges in-place for each symmetry group.
+
+    Returns the updated charge list together with warnings for any missing atoms.
+    """
+    labels = extract_atom_labels_from_mol2(mol2_file)
+    label_to_index = {label: idx for idx, label in enumerate(labels)}
+    charges_list = list(charges)
+    warnings: List[str] = []
+    for representative, group_atoms in equivalence_groups.items():
+        full_group = [representative] + list(group_atoms)
+        indices: List[int] = []
+        missing: List[str] = []
+        for atom_label in full_group:
+            idx = label_to_index.get(atom_label)
+            if idx is None:
+                missing.append(atom_label)
+            else:
+                indices.append(idx)
+        if missing:
+            warnings.append(
+                "Missing atoms for symmetry averaging: "
+                + ", ".join(missing)
+                + f" (reference: {representative})"
+            )
+            continue
+        if not indices:
+            continue
+        mean_charge = sum(charges_list[idx] for idx in indices) / len(indices)
+        for idx in indices:
+            charges_list[idx] = mean_charge
+    return charges_list, warnings

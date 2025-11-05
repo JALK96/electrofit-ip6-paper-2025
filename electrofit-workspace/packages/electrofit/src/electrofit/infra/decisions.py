@@ -96,10 +96,15 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
     warnings: list[str] = []
     if protocol == 'bcc':
         charges_origin = 'AM1-BCC'
-        # Symmetry ignored in bcc path
-        if adjust_sym or ignore_sym:
-            warnings.append('symmetry flags ignored (protocol=bcc initial path)')
-        symmetry_effective = 'applied (antechamber defined)'
+        if adjust_sym:
+            if ignore_sym:
+                symmetry_effective = 'none'
+                warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
+            else:
+                symmetry_effective = 'applied (user defined)'
+                notes.append('bcc pipeline: Mulliken → AM1-BCC with symmetry averaging')
+        else:
+            symmetry_effective = 'applied (antechamber defined)'
     elif protocol == 'opt':
         charges_origin = 'resp_initial'
         if adjust_sym:

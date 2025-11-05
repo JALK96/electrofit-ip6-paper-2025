@@ -8,6 +8,7 @@ Goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import os
 import subprocess
@@ -20,6 +21,7 @@ from electrofit.cli.run_commands import (
     run_gaussian_calculation,
     run_resp,
     run_python,
+    run_command,
 )
 from electrofit.io.files import find_file_with_extension
 from electrofit.io.mol2_ops import mol2_to_pdb_and_back, update_mol2_charges
@@ -27,6 +29,7 @@ from electrofit.domain.symmetry.write_symmetry import write_symmetry
 from electrofit.domain.symmetry.resp_constraints import apply_and_optionally_modify, RespSymmetryConfig
 from electrofit.io.resp_edit import edit_resp_input
 from electrofit.infra.decisions import build_initial_decision
+from electrofit.io.equiv import apply_symmetry_to_charges
 
 
 @dataclass(slots=True)
@@ -131,6 +134,64 @@ def normalize_residue_roundtrip(mol2_file: str, residue_name: str):
 # RESP symmetry handling unified via domain.symmetry.resp_constraints.apply_and_optionally_modify
 
 
+def _run_antechamber_mul(mol2_file: str, ac_output: str, net_charge: int, scratch_dir: str) -> None:
+    """Generate antechamber AC file with Mulliken charges."""
+    command = [
+        "antechamber",
+        "-i",
+        mol2_file,
+        "-fi",
+        "mol2",
+        "-fo",
+        "ac",
+        "-o",
+        ac_output,
+        "-c",
+        "mul",
+        "-nc",
+        str(net_charge),
+    ]
+    run_command(command, cwd=scratch_dir)
+
+
+def _run_am1bcc(ac_input: str, ac_output: str, scratch_dir: str) -> None:
+    """Apply AM1-BCC corrections while staying in AC format."""
+    command = [
+        "am1bcc",
+        "-i",
+        ac_input,
+        "-o",
+        ac_output,
+        "-j",
+        "5",
+    ]
+    run_command(command, cwd=scratch_dir)
+
+
+def _extract_charges_from_ac(ac_path: str) -> list[float]:
+    """Parse charges from an antechamber AC file."""
+    charges: list[float] = []
+    with open(ac_path, "r") as fh:
+        for line in fh:
+            if not line.startswith("ATOM"):
+                continue
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            try:
+                charges.append(float(parts[8]))
+            except ValueError:
+                continue
+    return charges
+
+
+def _write_charges_file(path: str, charges: list[float]) -> None:
+    """Write charges as one value per line with fixed precision."""
+    with open(path, "w") as fh:
+        for value in charges:
+            fh.write(f"{value:.6f}\n")
+
+
 def process_initial(cfg: InitialPrepConfig, scratch_dir: str, original_dir: str, input_files: list[str], run_acpype=_run_acpype_real) -> InitialResult:
     # Ensure residue name normalization (legacy behaviour) before any downstream tool consumption.
     # Previously this happened in the legacy shim unconditionally; during refactor it was only kept there.
@@ -195,9 +256,57 @@ def process_initial(cfg: InitialPrepConfig, scratch_dir: str, original_dir: str,
         mol2_final = os.path.join(scratch_dir, mol2_resp)
         charges_source = "resp"
     else:  # bcc
-        run_acpype(cfg.mol2_file, cfg.net_charge, scratch_dir, cfg.atom_type, charges="bcc")
-        acpype_map = _expose_acpype_outputs(cfg.mol2_file, scratch_dir)
-        mol2_final = os.path.join(scratch_dir, os.path.basename(cfg.mol2_file))
+        charges_mode = "bcc"
+        mol2_filename = cfg.mol2_file
+        if cfg.adjust_sym:
+            base_name = os.path.splitext(os.path.basename(mol2_filename))[0]
+            ac_file = f"{base_name}.ac"
+            bcc_ac_file = f"{base_name}.bcc.ac"
+            bcc_chg_file = f"{base_name}.bcc.chg"
+            eq_chg_file = f"{base_name}.bcc.eq.chg"
+            logging.info("[prep][bcc] running Mulliken -> AM1-BCC pipeline with symmetry options (ignore_sym=%s)", cfg.ignore_sym)
+            _run_antechamber_mul(mol2_filename, ac_file, cfg.net_charge, scratch_dir)
+            _run_am1bcc(ac_file, bcc_ac_file, scratch_dir)
+            ac_abs = os.path.join(scratch_dir, bcc_ac_file)
+            charges = _extract_charges_from_ac(ac_abs)
+            if not charges:
+                raise ValueError(f"No charges extracted from {bcc_ac_file}")
+            bcc_chg_abs = os.path.join(scratch_dir, bcc_chg_file)
+            _write_charges_file(bcc_chg_abs, charges)
+            charges_file = bcc_chg_file
+            if not cfg.ignore_sym:
+                equiv_path = os.path.join(scratch_dir, "equiv_groups.json")
+                if os.path.isfile(equiv_path):
+                    try:
+                        with open(equiv_path, "r") as fh:
+                            equivalence_groups = json.load(fh)
+                    except Exception as err:
+                        logging.warning("[prep][bcc] failed to load symmetry groups %s: %s", equiv_path, err)
+                    else:
+                        if equivalence_groups:
+                            mol2_abs = os.path.join(scratch_dir, mol2_filename)
+                            averaged, warnings = apply_symmetry_to_charges(mol2_abs, charges, equivalence_groups)
+                            for warning_msg in warnings:
+                                logging.warning("[prep][bcc][sym] %s", warning_msg)
+                            eq_chg_abs = os.path.join(scratch_dir, eq_chg_file)
+                            _write_charges_file(eq_chg_abs, averaged)
+                            charges_file = eq_chg_file
+                            charges = averaged
+                        else:
+                            logging.info("[prep][bcc] symmetry groups file is empty; skipping averaging")
+                else:
+                    logging.warning("[prep][bcc] equiv_groups.json not found in scratch; skipping symmetry averaging")
+            run_python(
+                update_mol2_charges,
+                mol2_filename,
+                charges_file,
+                mol2_filename,
+                cwd=scratch_dir,
+            )
+            charges_mode = "user"
+        run_acpype(mol2_filename, cfg.net_charge, scratch_dir, cfg.atom_type, charges=charges_mode)
+        acpype_map = _expose_acpype_outputs(mol2_filename, scratch_dir)
+        mol2_final = os.path.join(scratch_dir, os.path.basename(mol2_filename))
         charges_source = "bcc"
     logging.info("Initial structure processing complete (%s)", cfg.molecule_name)
     return InitialResult(
