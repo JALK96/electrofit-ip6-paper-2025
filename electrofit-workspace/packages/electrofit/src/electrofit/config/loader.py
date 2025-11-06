@@ -34,6 +34,11 @@ class ProjectSection:
     calculate_group_average: bool = False
 
 @dataclass
+class SymmetrySection:
+    initial: str | None = None
+    ensemble: str | None = None
+
+@dataclass
 class PathsSection:
     mdp_dir: str = "data/MDP"
     base_scratch_dir: str | None = None
@@ -86,6 +91,7 @@ class SimulationSection:
 class Config:
     project_root: Path
     project: ProjectSection = field(default_factory=ProjectSection)
+    symmetry: SymmetrySection = field(default_factory=SymmetrySection)
     paths: PathsSection = field(default_factory=PathsSection)
     gmx: GMXSection = field(default_factory=GMXSection)
     simulation: SimulationSection = field(default_factory=SimulationSection)
@@ -275,7 +281,7 @@ def load_config(
         data["gmx"] = data.pop("gromacs")
 
     # Perform merges
-    for section_name in ("project", "paths", "gmx", "simulation"):
+    for section_name in ("project", "symmetry", "paths", "gmx", "simulation"):
         payload = data.get(section_name, {})
         section = getattr(cfg, section_name)
         if isinstance(payload, dict):
@@ -308,3 +314,50 @@ def load_config(
         raise ValueError(f"Ion configuration error: {exc}") from exc
 
     return cfg
+
+
+__all__ = [
+    "Config",
+    "ProjectSection",
+    "PathsSection",
+    "SymmetrySection",
+    "GMXSection",
+    "SimulationSection",
+    "load_config",
+    "dump_config",
+    "resolve_symmetry_flags",
+]
+_SYMMETRY_MODE_FLAGS: dict[str, tuple[bool, bool]] = {
+    "antechamber": (False, False),
+    "user": (True, False),
+    "none": (True, True),
+}
+
+
+def _normalize_symmetry_mode(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    mode = raw.strip().lower()
+    return mode or None
+
+
+def resolve_symmetry_flags(cfg: "Config", stage: t.Literal["initial", "ensemble"]) -> tuple[bool, bool]:
+    """Resolve (adjust_symmetry, ignore_symmetry) for a pipeline stage.
+
+    Falls back to legacy project-level booleans when the new [symmetry] section is absent.
+    """
+    section = getattr(cfg, "symmetry", None)
+    mode_value = None
+    if section is not None:
+        mode_value = getattr(section, stage, None)
+    mode = _normalize_symmetry_mode(mode_value)
+    if mode:
+        flags = _SYMMETRY_MODE_FLAGS.get(mode)
+        if flags is None:
+            raise ValueError(
+                f"Invalid symmetry.{stage} mode '{mode_value}'. Expected one of: "
+                + ", ".join(sorted(_SYMMETRY_MODE_FLAGS))
+            )
+        return flags
+    # Legacy fallback: use project-level booleans
+    return bool(getattr(cfg.project, "adjust_symmetry", False)), bool(getattr(cfg.project, "ignore_symmetry", False))
