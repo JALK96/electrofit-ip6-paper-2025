@@ -16,7 +16,7 @@ from typing import Tuple, Dict
 from electrofit.io.mol2_ops import update_mol2_charges, parse_charges_from_mol2
 from electrofit.io.symmetry import load_symmetry_groups
 from electrofit.cli.run_commands import run_acpype
-from electrofit.config.loader import load_config, dump_config
+from electrofit.config.loader import load_config, dump_config, resolve_symmetry_flags
 from electrofit.infra.config_snapshot import compose_snapshot
 from electrofit.io.files import (
     adjust_atom_names,
@@ -48,6 +48,50 @@ def calculate_symmetric_group_averages(charges_dict_file: Path, equivalent_group
             if atom in updated:
                 updated[atom]["average_charge"] = mean_v
     return updated
+
+
+def _apply_group_average_in_memory(charges_dict: dict[str, dict], equivalent_groups: dict[str, list[str]]) -> dict[str, dict]:
+    """Return a deep-copied charges dict with symmetry-group averages applied."""
+    updated = {atom: {"charges": list(rec.get("charges", [])), "average_charge": rec.get("average_charge", 0.0)} for atom, rec in charges_dict.items()}
+    for representative, group in equivalent_groups.items():
+        full_group = [representative] + list(group)
+        vals = [charges_dict.get(a, {}).get("average_charge") for a in full_group if a in charges_dict]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            continue
+        mean_v = sum(vals) / len(vals)
+        for atom in full_group:
+            if atom in updated:
+                updated[atom]["average_charge"] = mean_v
+    return updated
+
+
+def _write_charge_bundle(results_dir: Path, prefix: str, charges_dict: dict[str, dict]) -> Path:
+    """Persist charges dict in .json/.txt/.chg formats and return the .chg path."""
+    json_path = results_dir / f"{prefix}_dict.json"
+    json_path.write_text(json.dumps(charges_dict, indent=2))
+    txt_path = results_dir / f"{prefix}.txt"
+    with txt_path.open("w") as f:
+        f.write("#Atom_Name\tAverage_Charge\n")
+        for atom, rec in charges_dict.items():
+            f.write(f"{atom}\t{rec['average_charge']:.4f}\n")
+    chg_path = results_dir / f"{prefix}.chg"
+    chg_lines = [f"{rec['average_charge']:.4f}" for rec in charges_dict.values()]
+    chg_path.write_text("\n".join(chg_lines) + "\n")
+    return chg_path
+
+
+def _find_symmetry_json(results_dir: Path, extracted: Path, pis_dir: Path) -> Path | None:
+    """Locate a symmetry JSON file, checking results, extracted_conforms and run directories."""
+    candidates: list[Path] = [
+        results_dir / "equiv_groups.json",
+        extracted / "equiv_groups.json",
+    ]
+    candidates.extend(sorted(pis_dir.glob("*.json")))
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
 
 
 def process_molecule_average_charges(
@@ -88,6 +132,9 @@ def process_molecule_average_charges(
         return False, "no acpype dir"
     ac_dir = acpype_glob[0]
     results_dir.mkdir(exist_ok=True)
+    # Plot artifacts go into a dedicated subfolder to avoid clobbering root-level *.chg outputs
+    plots_dir = results_dir / "plots"
+    plots_dir.mkdir(exist_ok=True)
 
     compose_snapshot(
         results_dir,
@@ -111,8 +158,9 @@ def process_molecule_average_charges(
     molecule_name = proj.molecule_name or mol_dir.name
     charge = proj.charge or 0
     atom_type = proj.atom_type or "gaff2"
-    adjust_sym = getattr(proj, "adjust_symmetry", False)
-    ignore_sym = getattr(proj, "ignore_symmetry", False)
+    adjust_sym, ignore_sym = resolve_symmetry_flags(cfg, "ensemble")
+    proj.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
+    proj.ignore_symmetry = ignore_sym  # type: ignore[attr-defined]
     calc_group_average = getattr(proj, "calculate_group_average", False)
     protocol = getattr(proj, "protocol", None)
 
@@ -153,7 +201,7 @@ def process_molecule_average_charges(
         logging.debug("[step6] early average_charges.chg write failed", exc_info=True)
 
     try:
-        plot_charges_by_atom(atoms_dict, initial_charges_dict, str(results_dir))
+        plot_charges_by_atom(atoms_dict, initial_charges_dict, str(plots_dir))
     except Exception as e:  # pragma: no cover
         print(f"[step6][warn] plotting per-atom charges failed: {e}")
 
@@ -198,8 +246,6 @@ def process_molecule_average_charges(
 
     cleaned_dict = atoms_dict
     outlier_removed = False
-    cleaned_charges_file: Path | None = None
-    executed_acpype = False
     if remove_outlier:
         # Construct dataframe for IQR filtering (row = conformer)
         try:
@@ -262,8 +308,8 @@ def process_molecule_average_charges(
                         rec["average_charge"] += proportion * deviation
             (results_dir / "cleaned_adjusted_charges.json").write_text(json.dumps(cleaned_dict, indent=2))
             cleaned_lines = [f"{rec['average_charge']:.4f}" for rec in cleaned_dict.values()]
-            cleaned_charges_file = results_dir / "cleaned_average_charges.chg"
-            cleaned_charges_file.write_text("\n".join(cleaned_lines) + "\n")
+            cleaned_charges_path = results_dir / "cleaned_average_charges.chg"
+            cleaned_charges_path.write_text("\n".join(cleaned_lines) + "\n")
             outlier_removed = True
             logging.info(
                 f"[step6] Outlier removal: removed {row_outlier.sum()} / {len(row_outlier)} conformers (factor={outlier_iqr_factor})."
@@ -282,332 +328,191 @@ def process_molecule_average_charges(
             if plot_histograms:
                 _mark("after_outlier", False, True, "hist_no_outlier.pdf", f"error: {e}")
 
-    # If no group average requested we might still want histograms with just before/after outlier removal.
-    # Group averaging logic below may produce adjusted histogram.
+    # Determine symmetry mapping and optional group averaging behaviour
+    sym_json_path = _find_symmetry_json(results_dir, extracted, pis_dir)
+    symmetry_mapping: dict[str, list[str]] | None = None
+    symmetry_json_found = False
+    if sym_json_path:
+        try:
+            symmetry_mapping = load_symmetry_groups(str(sym_json_path))
+            symmetry_json_found = True
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][symmetry] failed to load {sym_json_path}: {e}")
+    elif calc_group_average:
+        logging.warning("[step6] calculate_group_average requested but no symmetry JSON found; skipping group averaging")
 
-    if adjust_sym and not ignore_sym:
-        sym_json = extracted / "equiv_groups.json"
-        if not sym_json.is_file():
-            cand = list(pis_dir.glob("*.json"))
-            if cand:
-                sym_json = cand[0]
-        if sym_json.is_file():
-            equiv_group = load_symmetry_groups(str(sym_json))
+    base_dict_for_group = cleaned_dict if outlier_removed else atoms_dict
+
+    if symmetry_mapping:
+        try:
+            plot_charges_by_symmetry(atoms_dict, initial_charges_dict, str(plots_dir), symmetry_mapping)
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][symmetry-plot] failed: {e}")
+        try:
+            plot_charges_by_atom_sym(atoms_dict, initial_charges_dict, str(plots_dir), equivalent_groups=symmetry_mapping)
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][symmetry-plot-atom] failed: {e}")
+        if plot_histograms and hist_combine_groups and not calc_group_average:
             try:
-                plot_charges_by_symmetry(atoms_dict, initial_charges_dict, str(results_dir), equiv_group)
-            except Exception as e:  # pragma: no cover
-                logging.debug(f"[step6][symmetry-plot] failed: {e}")
-            if calc_group_average and not remove_outlier:
-                updated = calculate_symmetric_group_averages(results_dir / "charges_dict.json", sym_json)
-                (results_dir / "group_average_charges_dict.json").write_text(json.dumps(updated, indent=2))
-                group_txt = results_dir / "group_average_charges.txt"
-                with group_txt.open("w") as f:
-                    f.write("#Atom_Name\tAverage_Charge\n")
-                    for atom, rec in updated.items():
-                        f.write(f"{atom}\t{rec['average_charge']:.4f}\n")
-                lines = [f"{rec['average_charge']:.4f}" for rec in updated.values()]
-                (results_dir / "group_average_charges.chg").write_text("\n".join(lines) + "\n")
-                updated_mol2_out = results_dir / f"averaged_{molecule_name}.mol2"
-                chg_file = results_dir / "group_average_charges.chg"
-                logging.info("[step6] Updating MOL2 with group average charges and running acpype (user charges mode)...")
-                update_mol2_charges(mol2_source_file_path, str(chg_file), str(updated_mol2_out))
-                run_acpype(str(updated_mol2_out), charge, str(results_dir), proj.atom_type or "gaff2", charges="user")
-                try:
-                    build_aggregation_decision(
-                        protocol=protocol,
-                        adjust_sym=adjust_sym,
-                        ignore_sym=ignore_sym,
-                        calc_group_average=calc_group_average,
-                        group_average_applied=True,
-                        symmetry_json_found=symmetry_json_found,
-                    ).log('step6')
-                except Exception:  # pragma: no cover
-                    logging.debug('[step6][decisions] post-apply logging failed', exc_info=True)
-                if plot_histograms:
-                    try:
-                        specs_adj = [
-                            HistogramSpec(
-                                column=a,
-                                data_before=atoms_dict[a]["charges"],
-                                data_after=None,
-                                mean_line=updated[a]["average_charge"],
-                                color="darkgreen",
-                            )
-                            for a in atoms_dict
-                        ]
-                        plot_atom_histograms(
-                            specs_adj,
-                            results_dir / "hist_adjusted.pdf",
-                            "Charge Distribution with Group Average Charges",
-                            bins=hist_bins,
-                        )
-                        _mark("adjusted", True, True, "hist_adjusted.pdf")
-                    except Exception as e:  # pragma: no cover
-                        logging.debug(f"[step6][hist] adjusted (group avg) failed: {e}")
-                        _mark("adjusted", False, True, None, f"error: {e}")
-                if plot_histograms and hist_combine_groups:
-                    try:
-                        group_specs = []
-                        for rep, group_atoms in equiv_group.items():
-                            atoms_all = [rep] + list(group_atoms)
-                            combined = []
-                            for a in atoms_all:
-                                combined.extend(atoms_dict.get(a, {}).get("charges", []))
-                            mean_line = updated.get(rep, {}).get("average_charge")
-                            group_specs.append(
-                                HistogramSpec(
-                                    column=f"Group:{rep}",
-                                    data_before=combined,
-                                    mean_line=mean_line,
-                                    color="purple",
-                                )
-                            )
-                        if group_specs:
-                            plot_atom_histograms(
-                                group_specs,
-                                results_dir / "hist_groups.pdf",
-                                "Group-Combined Charge Distributions",
-                                bins=hist_bins,
-                            )
-                            _mark("group_combined", True, True, "hist_groups.pdf")
-                        else:
-                            _mark("group_combined", False, True, None, "no groups")
-                    except Exception as e:  # pragma: no cover
-                        logging.debug(f"[step6][hist] group combined failed: {e}")
-                        _mark("group_combined", False, True, None, f"error: {e}")
-            else:
-                avg_chg = results_dir / "average_charges.chg"
-                if avg_chg.is_file() and not calc_group_average and not remove_outlier:  # avoid premature update if group avg path or outlier path will handle it
-                    updated_mol2_out = results_dir / f"averaged_{molecule_name}.mol2"
-                    logging.info("[step6] Updating MOL2 with average charges (symmetry, no group average) and running acpype...")
-                    update_mol2_charges(mol2_source_file_path, str(avg_chg), str(updated_mol2_out))
-                    run_acpype(str(updated_mol2_out), charge, str(results_dir), proj.atom_type or "gaff2", charges="user")
-                    executed_acpype = True
-                elif not avg_chg.is_file():
-                    print(f"[step6][warn] (symmetry,no-group-average) missing average_charges.chg in {results_dir}")
-                if plot_histograms and hist_combine_groups:
-                    # Provide group combined hist even without group average (raw distributions)
-                    try:
-                        group_specs = []
-                        for rep, group_atoms in equiv_group.items():
-                            atoms_all = [rep] + list(group_atoms)
-                            combined = []
-                            for a in atoms_all:
-                                combined.extend(atoms_dict.get(a, {}).get("charges", []))
-                            mean_line = sum(combined) / len(combined) if combined else None
-                            group_specs.append(
-                                HistogramSpec(
-                                    column=f"Group:{rep}",
-                                    data_before=combined,
-                                    mean_line=mean_line,
-                                    color="purple",
-                                )
-                            )
-                        if group_specs:
-                            plot_atom_histograms(
-                                group_specs,
-                                results_dir / "hist_groups.pdf",
-                                "Group-Combined Charge Distributions",
-                                bins=hist_bins,
-                            )
-                            _mark("group_combined", True, True, "hist_groups.pdf")
-                        else:
-                            _mark("group_combined", False, True, None, "no groups")
-                    except Exception as e:  # pragma: no cover
-                        logging.debug(f"[step6][hist] group combined (no group avg) failed: {e}")
-                        _mark("group_combined", False, True, None, f"error: {e}")
-        else:
-            print(f"[step6][warn] no symmetry JSON for {molecule_name}; skipping symmetry averaging")
-            if plot_histograms and hist_combine_groups:
-                _mark("group_combined", False, True, None, "missing symmetry JSON")
-    else:
-        if not calc_group_average and not remove_outlier:  # simple average case, perform mol2 update only when no further adjustments
-            avg_chg = results_dir / "average_charges.chg"
-            if avg_chg.is_file():
-                updated_mol2_out = results_dir / f"averaged_{molecule_name}.mol2"
-                logging.info("[step6] Updating MOL2 with average charges (no symmetry averaging) and running acpype...")
-                update_mol2_charges(mol2_source_file_path, str(avg_chg), str(updated_mol2_out))
-                run_acpype(str(updated_mol2_out), charge, str(results_dir), proj.atom_type or "gaff2", charges="user")
-                executed_acpype = True
-            else:
-                print(f"[step6][warn] expected average_charges.chg missing in {results_dir}")
-            if plot_histograms and not remove_outlier:
-                # Show average charge means as dashed lines
-                try:
-                    with open(results_dir / "charges_dict.json") as f:
-                        orig = json.load(f)
-                    specs_avg = [
+                group_specs = []
+                for rep, group_atoms in symmetry_mapping.items():
+                    atoms_all = [rep] + list(group_atoms)
+                    combined = []
+                    for atom in atoms_all:
+                        combined.extend(base_dict_for_group.get(atom, {}).get("charges", []))
+                    mean_line = sum(combined) / len(combined) if combined else None
+                    group_specs.append(
                         HistogramSpec(
-                            column=a,
-                            data_before=orig[a]["charges"],
-                            mean_line=orig[a]["average_charge"],
-                            color="darkblue",
+                            column=f"Group:{rep}",
+                            data_before=combined,
+                            mean_line=mean_line,
+                            color="purple",
                         )
-                        for a in orig
-                    ]
+                    )
+                if group_specs:
                     plot_atom_histograms(
-                        specs_avg,
-                        results_dir / "hist_adjusted.pdf",
-                        "Charge Distribution with Average Charges",
+                        group_specs,
+                        results_dir / "hist_groups.pdf",
+                        "Group-Combined Charge Distributions",
                         bins=hist_bins,
                     )
-                    _mark("adjusted", True, True, "hist_adjusted.pdf")
-                except Exception as e:  # pragma: no cover
-                    logging.debug(f"[step6][hist] avg lines failed: {e}")
-                    _mark("adjusted", False, True, None, f"error: {e}")
-    # Outlier + group average combined path (legacy cleaned_adjusted logic)
-    # Relaxed condition: if outliers removed and group average requested and a symmetry JSON is available (even if adjust_sym not explicitly set)
-    if remove_outlier and calc_group_average:
-        # after earlier removal we have cleaned_dict
-        try:
-            sym_json = extracted / "equiv_groups.json"
-            if not sym_json.is_file():
-                cand = list((mol_dir / 'run_gau_create_gmx_in').glob('*.json'))
-                if cand:
-                    sym_json = cand[0]
+                    _mark("group_combined", True, True, "hist_groups.pdf")
+                else:
+                    _mark("group_combined", False, True, None, "no groups")
+            except Exception as e:  # pragma: no cover
+                logging.debug(f"[step6][hist] group combined (raw) failed: {e}")
+                _mark("group_combined", False, True, None, f"error: {e}")
+    else:
+        if calc_group_average:
+            _mark("group_combined", False, True, None, "missing symmetry JSON")
 
-            # <-- decide if we can *apply* group-average in this combined path
-            can_apply_group_avg = sym_json.is_file() and not ignore_sym
-            symmetry_json_found = sym_json.is_file()  # keep this consistent with earlier usage
-
-            if can_apply_group_avg:
-                updated = calculate_symmetric_group_averages(
-                    results_dir / "cleaned_adjusted_charges.json", sym_json
-                )
-                (results_dir / "cleaned_adjusted_group_average_charges_dict.json"
-                ).write_text(json.dumps(updated, indent=2))
-                lines = [f"{rec['average_charge']:.4f}" for rec in updated.values()]
-                cleaned_group_chg = results_dir / "cleaned_adjusted_group_average_charges.chg"
-                cleaned_group_chg.write_text("\n".join(lines) + "\n")
-
-                # Update MOL2 + run acpype immediately for this combined path
-                try:
-                    updated_mol2_out = results_dir / f"averaged_{molecule_name}_cleaned.mol2"
-                    update_mol2_charges(mol2_source_file_path, str(cleaned_group_chg), str(updated_mol2_out))
-                    run_acpype(str(updated_mol2_out), charge, str(results_dir), proj.atom_type or "gaff2", charges="user")
-                    executed_acpype = True
-                except Exception:  # pragma: no cover
-                    logging.debug("[step6][outlier+group] mol2/acpype failed", exc_info=True)
-
-                # >>> NEW: emit decision log that records the *applied* state for the remove outlier path
-                try:
-                    build_aggregation_decision(
-                        protocol=protocol,
-                        adjust_sym=adjust_sym,
-                        ignore_sym=ignore_sym,
-                        calc_group_average=calc_group_average,
-                        group_average_applied=True,              # <— mark as applied
-                        symmetry_json_found=symmetry_json_found,
-                    ).log('step6')
-                except Exception:  # pragma: no cover
-                    logging.debug('[step6][decisions] outlier+group applied logging failed', exc_info=True)
-
-                if plot_histograms:
-                    try:
-                        specs_clean_adj = [
-                            HistogramSpec(
-                                column=a,
-                                data_before=atoms_dict[a]["charges"],
-                                data_after=cleaned_dict[a]["charges"],
-                                mean_line=updated[a]["average_charge"],
-                                color="darkred",
-                                overlay_color="darkgreen",
-                            )
-                            for a in atoms_dict
-                        ]
-                        plot_atom_histograms(
-                            specs_clean_adj,
-                            results_dir / "hist_adjusted.pdf",
-                            "Charge Distribution of Clipped Data with Reweighted Group Average Charges",
-                            bins=hist_bins,
-                        )
-                        _mark("adjusted", True, True, "hist_adjusted.pdf")
-                    except Exception as e:  # pragma: no cover
-                        logging.debug(f"[step6][hist] cleaned adjusted failed: {e}")
-                        _mark("adjusted", False, True, None, f"error: {e}")
-
-                    if hist_combine_groups:
-                        try:
-                            equiv_group = load_symmetry_groups(str(sym_json))
-                            group_specs = []
-                            for rep, group_atoms in equiv_group.items():
-                                atoms_all = [rep] + list(group_atoms)
-                                combined_before = []
-                                combined_after = []
-                                for a in atoms_all:
-                                    combined_before.extend(atoms_dict.get(a, {}).get("charges", []))
-                                    combined_after.extend(cleaned_dict.get(a, {}).get("charges", []))
-                                mean_line = updated.get(rep, {}).get("average_charge") \
-                                    if isinstance(updated.get(rep, {}), dict) else None
-                                group_specs.append(
-                                    HistogramSpec(
-                                        column=f"Group:{rep}",
-                                        data_before=combined_before,
-                                        data_after=combined_after,
-                                        mean_line=mean_line,
-                                        color="purple",
-                                        overlay_color="darkgreen",
-                                    )
-                                )
-                            if group_specs:
-                                plot_atom_histograms(
-                                    group_specs,
-                                    results_dir / "hist_groups.pdf",
-                                    "Group-Combined Charge Distributions (Cleaned)",
-                                    bins=hist_bins,
-                                )
-                                _mark("group_combined", True, True, "hist_groups.pdf")
-                            else:
-                                _mark("group_combined", False, True, None, "no groups")
-                        except Exception as e:  # pragma: no cover
-                            logging.debug(f"[step6][hist] cleaned group combined failed: {e}")
-                            _mark("group_combined", False, True, None, f"error: {e}")
-
-            else:
-                # We are in the outlier+group path, but can't apply (missing JSON or ignore_sym=True)
-                # Optional: log that it was still requested but not applied.
-                try:
-                    build_aggregation_decision(
-                        protocol=protocol,
-                        adjust_sym=adjust_sym,
-                        ignore_sym=ignore_sym,
-                        calc_group_average=calc_group_average,
-                        group_average_applied=False,             # <— remains not applied
-                        symmetry_json_found=symmetry_json_found,
-                    ).log('step6')
-                except Exception:
-                    logging.debug('[step6][decisions] outlier+group not-applied logging failed', exc_info=True)
-
-        except Exception as e:  # pragma: no cover
-            logging.debug(f"[step6][outlier+group] failed: {e}")
-            if plot_histograms:
-                _mark("adjusted", False, True, None, f"error: {e}")
-                if hist_combine_groups:
-                    _mark("group_combined", False, True, None, f"error: {e}")
-    # Post-outlier finalisation: if outlier_removed and acpype noch nicht lief, nutze gereinigte oder group-average Dateien.
-    if outlier_removed and not executed_acpype:
-        candidate = None
-        out_name = None
-        if (results_dir / "cleaned_adjusted_group_average_charges.chg").is_file():
-            candidate = results_dir / "cleaned_adjusted_group_average_charges.chg"
-            out_name = f"averaged_{molecule_name}_cleaned.mol2"
-        elif cleaned_charges_file and cleaned_charges_file.is_file():
-            candidate = cleaned_charges_file
-            out_name = f"averaged_{molecule_name}_cleaned.mol2"
-        elif (results_dir / "group_average_charges.chg").is_file():
-            candidate = results_dir / "group_average_charges.chg"
-            out_name = f"averaged_{molecule_name}.mol2"
-        elif (results_dir / "average_charges.chg").is_file():
-            candidate = results_dir / "average_charges.chg"
-            out_name = f"averaged_{molecule_name}.mol2"
-        if candidate and out_name:
+    group_avg_dict: dict[str, dict] | None = None
+    group_avg_chg_path: Path | None = None
+    group_average_applied = False
+    if calc_group_average and symmetry_mapping:
+        group_avg_dict = _apply_group_average_in_memory(base_dict_for_group, symmetry_mapping)
+        prefix = "cleaned_adjusted_group_average_charges" if outlier_removed else "group_average_charges"
+        group_avg_chg_path = _write_charge_bundle(results_dir, prefix, group_avg_dict)
+        group_average_applied = True
+        if plot_histograms:
             try:
-                updated_mol2_out = results_dir / out_name
-                logging.info("[step6] Finalizing MOL2 update after outlier removal and running acpype...")
-                update_mol2_charges(mol2_source_file_path, str(candidate), str(updated_mol2_out))
+                specs_adj = [
+                    HistogramSpec(
+                        column=atom,
+                        data_before=base_dict_for_group[atom]["charges"],
+                        data_after=None,
+                        mean_line=group_avg_dict[atom]["average_charge"],
+                        color="darkgreen",
+                    )
+                    for atom in base_dict_for_group
+                ]
+                plot_atom_histograms(
+                    specs_adj,
+                    results_dir / "hist_adjusted.pdf",
+                    "Charge Distribution with Group Average Charges",
+                    bins=hist_bins,
+                )
+                _mark("adjusted", True, True, "hist_adjusted.pdf")
+            except Exception as e:  # pragma: no cover
+                logging.debug(f"[step6][hist] group average means failed: {e}")
+                _mark("adjusted", False, True, None, f"error: {e}")
+        if plot_histograms and hist_combine_groups:
+            try:
+                group_specs = []
+                for rep, group_atoms in symmetry_mapping.items():
+                    atoms_all = [rep] + list(group_atoms)
+                    combined = []
+                    for atom in atoms_all:
+                        combined.extend(base_dict_for_group.get(atom, {}).get("charges", []))
+                    mean_line = group_avg_dict.get(rep, {}).get("average_charge")
+                    group_specs.append(
+                        HistogramSpec(
+                            column=f"Group:{rep}",
+                            data_before=combined,
+                            mean_line=mean_line,
+                            color="purple",
+                        )
+                    )
+                if group_specs:
+                    plot_atom_histograms(
+                        group_specs,
+                        results_dir / "hist_groups.pdf",
+                        "Group-Combined Charge Distributions",
+                        bins=hist_bins,
+                    )
+                    _mark("group_combined", True, True, "hist_groups.pdf")
+                else:
+                    _mark("group_combined", False, True, None, "no groups")
+            except Exception as e:  # pragma: no cover
+                logging.debug(f"[step6][hist] group combined (avg) failed: {e}")
+                _mark("group_combined", False, True, None, f"error: {e}")
+        try:
+            plot_charges_by_symmetry(group_avg_dict, initial_charges_dict, str(plots_dir), symmetry_mapping)
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][symmetry-plot][avg] failed: {e}")
+        try:
+            plot_charges_by_atom_sym(
+                base_dict_for_group,
+                initial_charges_dict,
+                str(plots_dir),
+                atoms_dict2=group_avg_dict,
+                equivalent_groups=symmetry_mapping,
+            )
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][symmetry-plot-atom][avg] failed: {e}")
+    elif plot_histograms and not remove_outlier:
+        # Show ensemble averages as reference lines when no group averaging is requested
+        try:
+            specs_avg = [
+                HistogramSpec(
+                    column=atom,
+                    data_before=atoms_dict[atom]["charges"],
+                    mean_line=atoms_dict[atom]["average_charge"],
+                    color="darkblue",
+                )
+                for atom in atoms_dict
+            ]
+            plot_atom_histograms(
+                specs_avg,
+                results_dir / "hist_adjusted.pdf",
+                "Charge Distribution with Average Charges",
+                bins=hist_bins,
+            )
+            _mark("adjusted", True, True, "hist_adjusted.pdf")
+        except Exception as e:  # pragma: no cover
+            logging.debug(f"[step6][hist] avg reference failed: {e}")
+            _mark("adjusted", False, True, None, f"error: {e}")
+
+    try:
+        build_aggregation_decision(
+            protocol=protocol,
+            adjust_sym=adjust_sym,
+            ignore_sym=ignore_sym,
+            calc_group_average=calc_group_average,
+            group_average_applied=group_average_applied,
+            symmetry_json_found=symmetry_json_found,
+        ).log('step6')
+    except Exception:  # pragma: no cover
+        logging.debug('[step6][decisions] aggregation logging failed', exc_info=True)
+
+    # Select final charge file for MOL2 update / ACPYPE
+    charge_candidates: list[tuple[Path, str]] = [
+        (results_dir / "cleaned_adjusted_group_average_charges.chg", f"averaged_{molecule_name}_cleaned.mol2"),
+        (results_dir / "cleaned_average_charges.chg", f"averaged_{molecule_name}_cleaned.mol2"),
+        (results_dir / "group_average_charges.chg", f"averaged_{molecule_name}.mol2"),
+        (results_dir / "average_charges.chg", f"averaged_{molecule_name}.mol2"),
+    ]
+    for chg_path, mol2_name in charge_candidates:
+        if chg_path.is_file():
+            try:
+                updated_mol2_out = results_dir / mol2_name
+                logging.info("[step6] Updating MOL2 with %s and running acpype...", chg_path.name)
+                update_mol2_charges(mol2_source_file_path, str(chg_path), str(updated_mol2_out))
                 run_acpype(str(updated_mol2_out), charge, str(results_dir), proj.atom_type or "gaff2", charges="user")
             except Exception:  # pragma: no cover
-                logging.debug("[step6] post-outlier mol2/acpype failed", exc_info=True)
+                logging.debug("[step6] mol2/acpype update failed", exc_info=True)
+            break
+
     # Write histogram manifest
     if plot_histograms:
         try:

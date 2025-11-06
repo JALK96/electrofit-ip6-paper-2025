@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Tuple
 import mdtraj as md  # noqa: F401
 
-from electrofit.config.loader import load_config, dump_config
+from electrofit.config.loader import load_config, dump_config, resolve_symmetry_flags
 from electrofit.infra.config_snapshot import compose_snapshot
 from electrofit.infra.logging import setup_logging, reset_logging
 from electrofit.infra.step_logging import log_relevant_config
@@ -41,8 +41,8 @@ def _extract_for_molecule(
     residue_name = getattr(proj, 'residue_name', None) or "LIG"
     logging.info(f"[step4][{mol_proc_dir.name}] using residue_name={residue_name}")
     print(f"[step4][debug] residue_name={residue_name}")
-    adjust_sym = getattr(proj, "adjust_symmetry", False)
     protocol = getattr(proj, "protocol", "bcc")
+    adjust_sym, ignore_sym = resolve_symmetry_flags(cfg, "ensemble")
 
     respin1_file = respin2_file = equiv_groups_file = None
     if protocol == "opt":
@@ -74,12 +74,15 @@ def _extract_for_molecule(
         build_sampling_decision(
             protocol=protocol,
             adjust_sym=adjust_sym,
-            ignore_sym=getattr(proj, 'ignore_symmetry', False),
+            ignore_sym=ignore_sym,
             sampling_method=method,
             sample_count=sample,
             seed=seed,
             symmetry_json_present=symmetry_json_present,
         ).log('step4')
+        # Update project section for logging parity
+        proj.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
+        proj.ignore_symmetry = ignore_sym  # type: ignore[attr-defined]
         log_relevant_config('step4', proj, ['molecule_name','residue_name','protocol','adjust_symmetry','ignore_symmetry'])
     except Exception:
         logging.debug('[step4][decisions] logging failed', exc_info=True)

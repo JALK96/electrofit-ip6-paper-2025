@@ -99,7 +99,7 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
         if adjust_sym:
             if ignore_sym:
                 symmetry_effective = 'none'
-                warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
+                warnings.append('symmetry modifications suppressed during initial charge assignment (ignore_symmetry=True)')
             else:
                 symmetry_effective = 'applied (user defined)'
                 notes.append('bcc pipeline: Mulliken → AM1-BCC with symmetry averaging')
@@ -110,7 +110,7 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
         if adjust_sym:
             if ignore_sym:
                 symmetry_effective = 'none'
-                warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
+                warnings.append('symmetry modifications suppressed during initial charge assignment (ignore_symmetry=True)')
             else:
                 symmetry_effective = 'applied (user defined)'
         else:
@@ -229,7 +229,7 @@ def build_aggregation_decision(
     if adjust_sym:
         if ignore_sym:
             symmetry_effective = 'none'
-            warnings.append('symmetry modifications suppressed (ignore_symmetry=True)')
+            warnings.append('symmetry modifications suppressed during RESP stage (ignore_symmetry=True)')
         else:
             symmetry_effective = 'applied (user defined)' if symmetry_json_found else 'applied (antechamber defined)'
             if symmetry_effective == 'applied (antechamber defined)':

@@ -17,7 +17,7 @@ from pathlib import Path
 from contextlib import contextmanager
 
 from electrofit.domain.prep.process_initial import InitialPrepConfig, process_initial
-from electrofit.config.loader import load_config, dump_config
+from electrofit.config.loader import load_config, dump_config, resolve_symmetry_flags
 from electrofit.io.files import find_file_with_extension
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, log_run_header, reset_logging, enable_header_dedup
@@ -93,8 +93,11 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
             logging.info("[step1][skip] no mol2 file detected in run directory; nothing to process")
             return
         molecule_name = os.path.splitext(os.path.basename(mol2_file))[0]
+        adjust_initial, ignore_initial = resolve_symmetry_flags(cfg, "initial")
+        cfg.project.adjust_symmetry = adjust_initial
+        cfg.project.ignore_symmetry = ignore_initial
         additional_input: list[str] = []
-        if cfg.project.adjust_symmetry:
+        if adjust_initial:
             try:
                 json_file = find_file_with_extension("json")
                 if json_file:
@@ -116,8 +119,8 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
             net_charge=net_charge,
             residue_name=residue_name,
             atom_type=atom_type,
-            adjust_sym=cfg.project.adjust_symmetry,
-            ignore_sym=cfg.project.ignore_symmetry,
+            adjust_sym=adjust_initial,
+            ignore_sym=ignore_initial,
             protocol=protocol,
         )
         # Use same ensure_finalized context to keep identical side effects

@@ -19,7 +19,7 @@ from pathlib import Path
 import os
 import logging
 import traceback
-from electrofit.config.loader import load_config, dump_config
+from electrofit.config.loader import load_config, dump_config, resolve_symmetry_flags
 from electrofit.infra.config_snapshot import compose_snapshot
 from electrofit.infra.logging import log_run_header, reset_logging, setup_logging
 from electrofit.domain.charges.process_conformer import (
@@ -199,7 +199,9 @@ def process_conformer_dir(
                 logging.warning("PDB not found at %s; scratch setup will proceed without it.", pdb_path)
 
             protocol   = (proj.protocol or "bcc").lower()
-            adjust_sym = bool(getattr(proj, "adjust_symmetry", False))
+            adjust_sym, ignore_sym = resolve_symmetry_flags(cfg, "ensemble")
+            proj.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
+            proj.ignore_symmetry = ignore_sym  # type: ignore[attr-defined]
 
             if protocol == "opt":
                 # RESP inputs (only include if present next to the PDB)
@@ -243,7 +245,7 @@ def process_conformer_dir(
                 net_charge=proj.charge or 0,
                 residue_name=proj.residue_name or "LIG",
                 adjust_sym=adjust_sym,
-                ignore_sym=getattr(proj, "ignore_symmetry", False),
+                ignore_sym=ignore_sym,
                 protocol=protocol,
             )
             try:

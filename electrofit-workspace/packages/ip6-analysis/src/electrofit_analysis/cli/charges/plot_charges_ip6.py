@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 # Import necessary modules from the project
-from electrofit.config.loader import load_config
+from electrofit.config.loader import load_config, resolve_symmetry_flags
 from electrofit.config.legacy import ConfigParser
 from electrofit.io.files import (
     adjust_atom_names,
@@ -433,9 +433,10 @@ def main(project_root: str, remove_outlier: bool = False) -> None:
             print(f"Charge set to: {charge}")
             atom_type = cfg.project.atom_type
             print(f"AtomType set to: {atom_type}")
-            adjust_sym = bool(cfg.project.adjust_symmetry)
+            adjust_sym, ignore_sym = resolve_symmetry_flags(cfg, "ensemble")
+            cfg.project.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
+            cfg.project.ignore_symmetry = ignore_sym  # type: ignore[attr-defined]
             print("AdjustSymmetry set to:", adjust_sym)
-            ignore_sym = bool(cfg.project.ignore_symmetry)
             print("IgnoreSymmetry set to:", ignore_sym)
             calc_group_average = bool(cfg.project.calculate_group_average)
             print("CalculateGroupAverage set to:", calc_group_average)
@@ -501,6 +502,7 @@ def main(project_root: str, remove_outlier: bool = False) -> None:
         # Plotting charges
         equiv_group = None
         if adjust_sym:
+            cwd0 = os.getcwd()
             try:
                 os.chdir(pis_dir)
                 eq_file = find_file_with_extension("json")

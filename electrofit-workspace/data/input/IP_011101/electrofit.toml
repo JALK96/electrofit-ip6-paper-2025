@@ -1,0 +1,38 @@
+# electrofit.toml — v0.2
+# This file replaces the old input.ef file
+
+[project]
+name                    = "IP_011101"
+molecule_name           = "IP_011101"    # must match the MOL2 filename stem
+residue_name            = "IP6"     # 3–4 char residue code
+charge                  = -8
+protocol                = "bcc"         # "bcc" or "opt"
+calculate_group_average = true
+
+# Atom typing
+atom_type               = "gaff2"       # gaff2 | gaff | amber
+
+[symmetry]
+initial  = "antechamber"                # none | user | antechember ; if user, provide equiv_group.json in input/data/mol/ 
+ensemble = "none"                       # none | user | antechember ; if none, use calculate_group_average = true under [project]
+
+[simulation]
+forcefield              = "amber14sb.ff" # folder with forcefield.itp, tip3p.itp, ions.itp
+
+[paths]
+mdp_dir                 = "data/MDP"    # contains em_steep.mdp, NVT.mdp, NPT.mdp, Production.mdp
+base_scratch_dir        = "/scratch/johannal96/tmp"
+
+[simulation.box]
+type    = "cubic"           # e.g. dodecahedron, cubic, triclinic
+edge_nm = 1.55  # distance from solute to box edge (nm)
+
+[simulation.ions]
+cation             = "NA"
+anion              = "CL"
+enforce_neutrality = true
+salt_concentration = 0.150   # mol/L
+
+[gromacs.runtime]
+threads = 16
+pin     = true                     # use: -pin on
