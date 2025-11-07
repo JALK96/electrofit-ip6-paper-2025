@@ -1,4 +1,5 @@
 import os
+import shutil
 import logging
 from typing import Iterable, Optional, Tuple
 
@@ -263,3 +264,54 @@ def validate_forcefield(forcefield: str, explicit: bool) -> None:
         logging.warning(msg + " (using default fallback anyway)")
     else:
         logging.info("[ff] Validated forcefield '%s' in %s", forcefield, top)
+
+
+# ---- Installation of path-provided forcefields into GMX top ---------------------
+
+def _conda_top_dir() -> Optional[str]:
+    """Return $CONDA_PREFIX/share/gromacs/top if it exists; else fall back to locate_gmx_topdir()."""
+    cprefix = os.environ.get("CONDA_PREFIX")
+    if cprefix:
+        top = os.path.join(cprefix, "share", "gromacs", "top")
+        if os.path.isdir(top):
+            return top
+    return locate_gmx_topdir()
+
+
+def ensure_forcefield_installed(ff_path: str) -> str:
+    """Ensure a '.ff' directory from a path is available under the active GMX 'top' directory.
+
+    - ff_path may be absolute or relative ("~/...", "./...", or project-local path).
+    - Verifies required files exist in the source folder.
+    - Copies into <top>/<ff_name> if missing. Returns the short name (e.g. 'amber14sb.ff').
+
+    Raises FileNotFoundError, ValueError, or PermissionError with helpful messages.
+    """
+    src = os.path.expanduser(os.path.expandvars(ff_path))
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"[ff] Source forcefield path not found: {src}")
+    ff_name = os.path.basename(src.rstrip(os.sep))
+    if not ff_name.endswith(".ff"):
+        raise ValueError(f"[ff] Expected a '.ff' directory, got: {ff_name}")
+
+    # Basic sanity: ensure core files exist
+    required = ("forcefield.itp", "tip3p.itp", "ions.itp")
+    missing = [p for p in required if not os.path.isfile(os.path.join(src, p))]
+    if missing:
+        raise FileNotFoundError(f"[ff] Missing files in {src}: {', '.join(missing)}")
+
+    top = _conda_top_dir()
+    if not top:
+        raise FileNotFoundError(
+            "[ff] Could not resolve GROMACS 'top' directory. Ensure CONDA_PREFIX is set or GMXDATA configured."
+        )
+    dest = os.path.join(top, ff_name)
+    if os.path.isdir(dest):
+        logging.info("[ff] '%s' already available in %s", ff_name, top)
+        return ff_name
+    try:
+        shutil.copytree(src, dest)
+        logging.info("[ff] Copied '%s' -> %s", src, dest)
+    except Exception as e:
+        raise PermissionError(f"[ff] Failed to install '{ff_name}' into '{top}': {e}") from e
+    return ff_name

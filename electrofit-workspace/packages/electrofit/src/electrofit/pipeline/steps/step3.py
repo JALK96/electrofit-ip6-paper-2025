@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from electrofit.config.loader import load_config, dump_config
 from electrofit.adapters.gromacs import set_up_production
-from electrofit.io.ff import validate_forcefield
+from electrofit.io.ff import validate_forcefield, ensure_forcefield_installed
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, reset_logging, log_run_header, enable_header_dedup
 from electrofit.pipeline.molecule_filter import filter_paths_for_molecule
@@ -92,7 +92,21 @@ def main():  # pragma: no cover
         # Pull simulation knobs from run config (fallback to defaults if absent)
         sim = getattr(cfg_run, "simulation", None)
         ff_attr = getattr(sim, "forcefield", None) if sim else None
-        ff = ff_attr or "amber14sb.ff"
+        ff_raw = ff_attr or "amber14sb.ff"
+        # If a path was specified, ensure the forcefield exists under the active GMX top
+        # and then always use the short name (e.g., 'amber14sb.ff') in includes.
+        if isinstance(ff_raw, str) and (os.path.isabs(ff_raw) or os.sep in ff_raw or ff_raw.startswith(".")):
+            ff_abs = ff_raw if os.path.isabs(ff_raw) else os.path.join(str(project_root), ff_raw)
+            try:
+                ff = ensure_forcefield_installed(ff_abs)
+            except Exception as e:
+                logging.error("[step3][abort] %s", e)
+                print(f"[step3][abort] {e}")
+                continue
+            explicit_ff = True
+        else:
+            ff = ff_raw
+            explicit_ff = ff_attr is not None
         runtime_local = getattr(getattr(cfg_run, "gmx", None), "runtime", None)
         threads = getattr(runtime_local, "threads", None) if runtime_local else None
         pin = getattr(runtime_local, "pin", None) if runtime_local else None
@@ -139,7 +153,7 @@ def main():  # pragma: no cover
             )
         # Validate (raises if user explicitly set a non-existent ff; warns otherwise)
         try:
-            validate_forcefield(ff, explicit=ff_attr is not None)
+            validate_forcefield(ff, explicit=explicit_ff)
         except FileNotFoundError as e:
             logging.error("[step3][abort] %s", e)
             print(f"[step3][abort] {e}")
