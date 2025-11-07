@@ -1035,9 +1035,9 @@ def _determine_hbond_command() -> str:
     return "gmx hbond"
 
 
-from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
 
-def main(project_dir: str, viz: bool = False, stage: str = 'final') -> None:
+def main(project_dir: str, viz: bool = False, stage: str = 'final', only=None) -> None:
     """Run hydrogen bond analysis for all molecules in the project's process directory.
 
     Args:
@@ -1052,12 +1052,15 @@ def main(project_dir: str, viz: bool = False, stage: str = 'final') -> None:
 
     # Loop through each subdirectory in the process directory
     run_dir_name, analyze_base = resolve_stage(stage)
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
     for folder_name in os.listdir(process_dir):
         folder_path = os.path.join(process_dir, folder_name)
         print(f"Running hydrogen bond analysis for: {folder_name}")
 
         # Check if it's a directory
         if os.path.isdir(folder_path):
+            if only_norm and folder_name not in only_norm:
+                continue
             
             run_final_sim_dir = os.path.join(folder_path, run_dir_name)
             run_gau_create_gmx_in_dir = os.path.join(folder_path, "run_gau_create_gmx_in")

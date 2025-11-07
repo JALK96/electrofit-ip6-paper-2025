@@ -542,12 +542,15 @@ def matrix_to_top_three_and_weights(M):
     return top_three_map, edge_weights
 
 # ---------- Main ----------
-from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
 
-def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: str = "continuous", width_ref: str = "auto", stage: str = 'final'):
+def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: str = "continuous", width_ref: str = "auto", stage: str = 'final', only=None):
     root = Path(root)
     run_dir_name, analyze_base = resolve_stage(stage)
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
     for ip_dir in sorted(root.glob("IP_*")):
+        if only_norm and ip_dir.name not in only_norm:
+            continue
         hbdir = ip_dir / analyze_base / "h_bonds"
         xpm = hbdir / f"{hbond_kind}_hb_matrix.xpm"
         log = hbdir / f"{hbond_kind}_hb.log"

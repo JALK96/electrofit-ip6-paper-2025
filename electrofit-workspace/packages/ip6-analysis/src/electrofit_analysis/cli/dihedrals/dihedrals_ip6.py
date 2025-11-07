@@ -24,7 +24,7 @@ from electrofit_analysis.viz.dihedral_helpers import (
 )
 
 from electrofit_analysis.structure.util.common_util import ensure_dir
-from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
 
 # -----------------------
 # Global style / config
@@ -42,13 +42,16 @@ cf.dark_gray = "dimgray"
 # -----------------------
 # Domain: Discovery & IO
 # -----------------------
-def iter_molecule_process_dirs(project_path: Path, run_dir_name: str, analyze_base: str) -> Iterable[Tuple[str, Path, Path]]:
+def iter_molecule_process_dirs(project_path: Path, run_dir_name: str, analyze_base: str, only: set[str] | None = None) -> Iterable[Tuple[str, Path, Path]]:
     """
     Yield (species_id, run_final_dir, analyze_dir) for each molecule under project/process/*.
     """
     process_dir = project_path / "process"
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
     for entry in sorted(process_dir.iterdir()):
         if not entry.is_dir():
+            continue
+        if only_norm and entry.name not in only_norm:
             continue
         species_id = entry.name.replace("IP_", "")
         run_dir = entry / run_dir_name
@@ -217,13 +220,13 @@ def process_one_molecule(logger: logging.Logger, project_path: Path, species_id:
     logger.info("Finished plots for %s", species_id)
 
 
-def main(project_path_str: str | None = None, stage: str = 'final'):
+def main(project_path_str: str | None = None, stage: str = 'final', only: set[str] | None = None):
 
 
     project_path = Path(project_path_str or PROJECT_PATH).resolve()
 
     run_dir_name, analyze_base = resolve_stage(stage)
-    for species_id, run_dir, outdir in iter_molecule_process_dirs(project_path, run_dir_name, analyze_base):
+    for species_id, run_dir, outdir in iter_molecule_process_dirs(project_path, run_dir_name, analyze_base, only=only):
         log_path = outdir / "dihedrals.log"
         setup_logging(log_path=log_path)
         logger = logging.getLogger(__name__)

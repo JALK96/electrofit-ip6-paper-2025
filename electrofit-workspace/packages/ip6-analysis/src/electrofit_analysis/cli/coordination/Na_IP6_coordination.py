@@ -39,6 +39,7 @@ from electrofit_analysis.viz.coord_helpers import (
 
 import seaborn as sns
 from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.cli.common import normalize_micro_name
 sns.set_context("talk")
 
 # ╔═══════════════════════════════════════════════════════════════╗
@@ -202,6 +203,7 @@ def main(
     project_dir: str,
     subdir: str = PROCESS_DIR_NAME,
     stage: str = "final",
+    only: set[str] | None = None,
     determine_global_y: bool = False,
     rdf_y_max: float | None = None,
     plot_projection: bool = False,
@@ -231,6 +233,7 @@ def main(
     process_dir  = project_path / subdir
     run_dir_name, analyze_base = resolve_stage(stage)
     print(f"Process Dir: {process_dir}")
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
 
     rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
     rdf_cache_path = pathlib.Path(rdf_data_path).resolve() if rdf_data_path else None
@@ -281,6 +284,8 @@ def main(
         # -----------------------------------------------------------------------
         for microstate in sorted(process_dir.iterdir()):
             if not microstate.is_dir():
+                continue
+            if only_norm and microstate.name not in only_norm:
                 continue
 
             run_dir = microstate / run_dir_name
@@ -360,6 +365,8 @@ def main(
 
     for microstate in sorted(process_dir.iterdir()):
         if not microstate.is_dir():
+            continue
+        if only_norm and microstate.name not in only_norm:
             continue
 
         run_dir = microstate / run_dir_name

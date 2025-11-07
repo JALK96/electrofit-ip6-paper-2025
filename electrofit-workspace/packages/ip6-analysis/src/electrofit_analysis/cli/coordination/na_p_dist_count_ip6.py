@@ -6,7 +6,7 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
 from electrofit.infra.logging import setup_logging
 from electrofit_analysis.structure.util.common_gmx import (
     create_index_file,
@@ -233,7 +233,7 @@ def plot_excess_ion_counts_subplots(
 # Main Execution Flow
 # ----------------------------
 
-def main(project_dir: str, stage: str = 'final') -> None:
+def main(project_dir: str, stage: str = 'final', only=None) -> None:
     """Run Na–P distance and ion-count analysis for all molecules under project_dir.
 
     Args:
@@ -243,10 +243,13 @@ def main(project_dir: str, stage: str = 'final') -> None:
     process_dir = os.path.join(project_dir, "process")
 
     # Loop through each subdirectory in the process directory
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
     for folder_name in os.listdir(process_dir):
         folder_path = os.path.join(process_dir, folder_name)
 
         if os.path.isdir(folder_path):
+            if only_norm and folder_name not in only_norm:
+                continue
             run_dir_name, analyze_base = resolve_stage(stage)
             run_sim_dir = os.path.join(folder_path, run_dir_name)
 

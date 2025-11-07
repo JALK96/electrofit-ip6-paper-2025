@@ -21,6 +21,7 @@ from electrofit.viz.helpers import (
     plot_charges_by_atom_sym,
     plot_charges_by_symmetry,
 )
+from electrofit_analysis.cli.common import parse_molecule_args, normalize_micro_name
 
 def calculate_symmetric_group_averages(charges_dict, equivalent_groups):
     """
@@ -385,7 +386,7 @@ def plot_histograms(
     plt.savefig(filename)
     plt.close()
 
-def main(project_root: str, remove_outlier: bool = False) -> None:
+def main(project_root: str, remove_outlier: bool = False, only=None) -> None:
     """Run IP6 charge plots for all molecules under <project_root>/process.
 
     Parameters
@@ -400,10 +401,17 @@ def main(project_root: str, remove_outlier: bool = False) -> None:
         print(f"process directory not found: {process_dir}")
         return
 
+    # normalize filter set if provided
+    only_norm = None
+    if only:
+        only_norm = {normalize_micro_name(x) for x in only}
+
     for sub_dir in sorted(os.listdir(process_dir)):
         sub_dir_path = os.path.join(process_dir, sub_dir)
         if not os.path.isdir(sub_dir_path):
             print(f"Skipping '{sub_dir_path}' as it is not a directory.")
+            continue
+        if only_norm and sub_dir not in only_norm:
             continue
 
         base_dir = os.path.join(sub_dir_path, "extracted_conforms")

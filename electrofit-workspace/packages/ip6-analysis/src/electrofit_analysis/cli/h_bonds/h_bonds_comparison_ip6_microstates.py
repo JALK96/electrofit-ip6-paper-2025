@@ -29,6 +29,7 @@ import seaborn as sns
 from pathlib import Path
 import argparse
 from electrofit.infra.logging import setup_logging
+from electrofit_analysis.cli.common import normalize_micro_name
 
 # ------------------------------------------------------------------------------
 # Common Utility Functions (PLACEHOLDER)
@@ -254,7 +255,7 @@ def print_donor_acceptor_table(species_id, data, logger, summary_format='arrow',
 # ------------------------------------------------------------------------------
 from electrofit_analysis.cli.common import resolve_stage
 
-def main(hbond_type: str, project_root: str, stage: str = 'final') -> None:
+def main(hbond_type: str, project_root: str, stage: str = 'final', only=None) -> None:
     """Run H-bond comparison analysis across all species in <project_root>/process.
 
     Parameters
@@ -295,11 +296,14 @@ def main(hbond_type: str, project_root: str, stage: str = 'final') -> None:
     donor_acceptor_summaries = {}
 
     # 3) Identify species subfolders
+    only_norm = {normalize_micro_name(x) for x in only} if only else None
     for fname in sorted(os.listdir(process_path)):
         if not fname.startswith("IP_"):
             continue
         folder_path = process_path / fname
         if not folder_path.is_dir():
+            continue
+        if only_norm and fname not in only_norm:
             continue
         species_id = fname.replace("IP_", "")
         n_ones = species_id.count('1')
