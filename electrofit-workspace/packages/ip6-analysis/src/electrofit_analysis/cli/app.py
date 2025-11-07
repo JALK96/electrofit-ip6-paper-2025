@@ -30,14 +30,14 @@ def _cmd_distance(args: argparse.Namespace) -> None:
     from .coordination.na_p_distance_ip6 import main as distance_main
 
     project = os.path.abspath(args.project)
-    distance_main(project)
+    distance_main(project, stage=getattr(args, 'stage', 'final'))
 
 
 def _cmd_count(args: argparse.Namespace) -> None:
     from .coordination.na_p_dist_count_ip6 import main as count_main
 
     project = os.path.abspath(args.project)
-    count_main(project)
+    count_main(project, stage=getattr(args, 'stage', 'final'))
 
 
 def _cmd_summarize_nap(args: argparse.Namespace) -> None:
@@ -84,6 +84,7 @@ def _cmd_summarize_nap(args: argparse.Namespace) -> None:
         do_coord=getattr(args, "coordination", False),
         plots=plots,
         coord_plots=coord_plots,
+        stage=getattr(args, 'stage', 'final'),
     )
 
 
@@ -101,6 +102,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
     coord_main(
         project_dir=project,
         subdir=args.subdir,
+        stage=getattr(args, 'stage', 'final'),
         determine_global_y=args.determine_global_y,
         rdf_y_max=args.rdf_y_max,
         plot_projection=args.plot_projection,
@@ -119,14 +121,14 @@ def _cmd_dihedrals(args: argparse.Namespace) -> None:
     from .dihedrals.dihedrals_ip6 import main as dihedrals_main
 
     project = os.path.abspath(args.project) if args.project else None
-    dihedrals_main(project)
+    dihedrals_main(project, stage=getattr(args, 'stage', 'final'))
 
 
 def _cmd_hbonds(args: argparse.Namespace) -> None:
     from .h_bonds.h_bonds_ip6 import main as hb_main
 
     project = os.path.abspath(args.project)
-    hb_main(project, viz=args.viz)
+    hb_main(project, viz=args.viz, stage=getattr(args, 'stage', 'final'))
 
 
 def _cmd_pp_matrix(args: argparse.Namespace) -> None:
@@ -134,7 +136,7 @@ def _cmd_pp_matrix(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project)
     root = os.path.join(project, "process")
-    ppm_main(root, args.kind, args.mode, args.width_mode, args.width_ref)
+    ppm_main(root, args.kind, args.mode, args.width_mode, args.width_ref, stage=getattr(args, 'stage', 'final'))
 
 
 def _cmd_hbonds_compare(args: argparse.Namespace) -> None:
@@ -143,7 +145,7 @@ def _cmd_hbonds_compare(args: argparse.Namespace) -> None:
     )
 
     project = os.path.abspath(args.project)
-    hbonds_compare_main(args.type, project)
+    hbonds_compare_main(args.type, project, stage=getattr(args, 'stage', 'final'))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dist.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
+    p_dist.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze 'final' (run_final_gmx_simulation) or 'sample' (run_gmx_simulation') trajectories.")
     p_dist.set_defaults(func=_cmd_distance)
 
     # count
@@ -174,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_count.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
+    p_count.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze 'final' (run_final_gmx_simulation) or 'sample' (run_gmx_simulation') trajectories.")
     p_count.set_defaults(func=_cmd_count)
 
 
@@ -217,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--coord-plots", default="box",
         help="Comma-separated plot types for coordination. Choices: box,stats. Default: box."
     )
+    p_sum.add_argument("--stage", choices=["final","sample"], default="final", help="Read from analyze_final_sim or analyze_sample_sim.")
 
     p_sum.set_defaults(func=_cmd_summarize_nap)
 
@@ -249,6 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="process",
         help="Relative subdirectory under the project root to traverse (default: process).",
     )
+    p_coord.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
     p_coord.add_argument(
         "--determine-global-y",
         action="store_true",
@@ -300,6 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         help="Project root (defaults to $ELECTROFIT_PROJECT_PATH or CWD if omitted).",
     )
+    p_dih.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
     p_dih.set_defaults(func=_cmd_dihedrals)
 
     # hbonds (run per-species analysis and plots)
@@ -316,6 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate plots/figures (opt-in).",
     )
+    p_hb.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
     p_hb.set_defaults(func=_cmd_hbonds)
 
     # pp-matrix (P-to-P matrix from H-bond XPM/log)
@@ -329,6 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ppm.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
+    p_ppm.add_argument("--stage", choices=["final","sample"], default="final", help="Read HBonds outputs from analyze_final_sim or analyze_sample_sim.")
     p_ppm.add_argument(
         "-k",
         "--kind",
@@ -367,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_hbc.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
+    p_hbc.add_argument("--stage", choices=["final","sample"], default="final", help="Read HBonds outputs from analyze_final_sim or analyze_sample_sim.")
     p_hbc.add_argument(
         "-t",
         "--type",

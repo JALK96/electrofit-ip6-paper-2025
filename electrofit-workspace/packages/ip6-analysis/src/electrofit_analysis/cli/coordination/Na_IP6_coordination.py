@@ -38,6 +38,7 @@ from electrofit_analysis.viz.coord_helpers import (
     )
 
 import seaborn as sns
+from electrofit_analysis.cli.common import resolve_stage
 sns.set_context("talk")
 
 # ╔═══════════════════════════════════════════════════════════════╗
@@ -45,8 +46,6 @@ sns.set_context("talk")
 # ╚═══════════════════════════════════════════════════════════════╝
 
 PROCESS_DIR_NAME   = "process"
-RUN_DIR_NAME       = "run_final_gmx_simulation"
-PLOT_DIR_NAME      = "analyze_final_sim/NaP_coordination"
 PLOT_NAME_TEMPLATE = "NaP_coordination_counts.png"
 
 RCUTOFF_NM         = 0.32       # coordination threshold  (change if desired)
@@ -202,6 +201,7 @@ def analyse_one_microstate(
 def main(
     project_dir: str,
     subdir: str = PROCESS_DIR_NAME,
+    stage: str = "final",
     determine_global_y: bool = False,
     rdf_y_max: float | None = None,
     plot_projection: bool = False,
@@ -229,6 +229,7 @@ def main(
     """
     project_path = pathlib.Path(project_dir).resolve()
     process_dir  = project_path / subdir
+    run_dir_name, analyze_base = resolve_stage(stage)
     print(f"Process Dir: {process_dir}")
 
     rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
@@ -282,9 +283,9 @@ def main(
             if not microstate.is_dir():
                 continue
 
-            run_dir = microstate / RUN_DIR_NAME
+            run_dir = microstate / run_dir_name
             if not run_dir.is_dir():
-                logging.debug("Skipping %s (no %s)", microstate.name, RUN_DIR_NAME)
+                logging.debug("Skipping %s (no %s)", microstate.name, run_dir_name)
                 continue
 
             traj = run_dir / "md_center.xtc"
@@ -293,7 +294,7 @@ def main(
                 logging.warning("Missing files in %s – skipped.", run_dir)
                 continue
 
-            dest_dir = microstate / PLOT_DIR_NAME
+            dest_dir = microstate / analyze_base / "NaP_coordination"
             dest_dir.mkdir(exist_ok=True)
             logfile = dest_dir / "NaP_coordination.log"
             setup_logging(logfile)
@@ -361,12 +362,12 @@ def main(
         if not microstate.is_dir():
             continue
 
-        run_dir = microstate / RUN_DIR_NAME
+        run_dir = microstate / run_dir_name
         if not run_dir.is_dir():
-            logging.debug("Skipping %s (no %s)", microstate.name, RUN_DIR_NAME)
+            logging.debug("Skipping %s (no %s)", microstate.name, run_dir_name)
             continue
 
-        dest_dir = microstate / PLOT_DIR_NAME
+        dest_dir = microstate / analyze_base / "NaP_coordination"
         dest_dir.mkdir(exist_ok=True)
 
         traj = run_dir / "md_center.xtc"

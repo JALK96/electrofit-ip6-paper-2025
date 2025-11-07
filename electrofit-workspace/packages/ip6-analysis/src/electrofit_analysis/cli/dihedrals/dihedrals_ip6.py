@@ -24,6 +24,7 @@ from electrofit_analysis.viz.dihedral_helpers import (
 )
 
 from electrofit_analysis.structure.util.common_util import ensure_dir
+from electrofit_analysis.cli.common import resolve_stage
 
 # -----------------------
 # Global style / config
@@ -41,7 +42,7 @@ cf.dark_gray = "dimgray"
 # -----------------------
 # Domain: Discovery & IO
 # -----------------------
-def iter_molecule_process_dirs(project_path: Path) -> Iterable[Tuple[str, Path, Path]]:
+def iter_molecule_process_dirs(project_path: Path, run_dir_name: str, analyze_base: str) -> Iterable[Tuple[str, Path, Path]]:
     """
     Yield (species_id, run_final_dir, analyze_dir) for each molecule under project/process/*.
     """
@@ -50,18 +51,18 @@ def iter_molecule_process_dirs(project_path: Path) -> Iterable[Tuple[str, Path, 
         if not entry.is_dir():
             continue
         species_id = entry.name.replace("IP_", "")
-        run_final = entry / "run_final_gmx_simulation"
-        if not run_final.is_dir():
+        run_dir = entry / run_dir_name
+        if not run_dir.is_dir():
             continue
-        analyze_dir = entry / "analyze_final_sim" / "dihedral"
-        yield species_id, run_final, analyze_dir
+        analyze_dir = entry / analyze_base / "dihedral"
+        yield species_id, run_dir, analyze_dir
 
 
-def load_universe(run_final_dir: Path) -> mda.Universe:
-    gro = run_final_dir / "md.gro"
-    xtc = run_final_dir / "md_center.xtc"
+def load_universe(run_dir: Path) -> mda.Universe:
+    gro = run_dir / "md.gro"
+    xtc = run_dir / "md_center.xtc"
     if not gro.is_file() or not xtc.is_file():
-        raise FileNotFoundError(f"Missing md.gro or md_center.xtc in {run_final_dir}")
+        raise FileNotFoundError(f"Missing md.gro or md_center.xtc in {run_dir}")
     return mda.Universe(str(gro), str(xtc))
 
 
@@ -189,9 +190,9 @@ def group_dihedral_positions(dihedral_group_indices: List[int], n_groups: int) -
 # -----------------------
 # Orchestration
 # -----------------------
-def process_one_molecule(logger: logging.Logger, project_path: Path, species_id: str, run_final: Path, outdir: Path):
+def process_one_molecule(logger: logging.Logger, project_path: Path, species_id: str, run_dir: Path, outdir: Path):
     ensure_dir(outdir)
-    u = load_universe(run_final)
+    u = load_universe(run_dir)
 
     groups = dihedral_groups_spec()
     dihedral_definitions, dihedral_group_indices, _group_names = flatten_groups(groups)
@@ -216,18 +217,19 @@ def process_one_molecule(logger: logging.Logger, project_path: Path, species_id:
     logger.info("Finished plots for %s", species_id)
 
 
-def main(project_path_str: str | None = None):
+def main(project_path_str: str | None = None, stage: str = 'final'):
 
 
     project_path = Path(project_path_str or PROJECT_PATH).resolve()
 
-    for species_id, run_final, outdir in iter_molecule_process_dirs(project_path):
+    run_dir_name, analyze_base = resolve_stage(stage)
+    for species_id, run_dir, outdir in iter_molecule_process_dirs(project_path, run_dir_name, analyze_base):
         log_path = outdir / "dihedrals.log"
         setup_logging(log_path=log_path)
         logger = logging.getLogger(__name__)
         logger.info("Project: %s", project_path)
         logger.info("Processing %s", species_id)
-        process_one_molecule(logger, project_path, species_id, run_final, outdir)
+        process_one_molecule(logger, project_path, species_id, run_dir, outdir)
 
 
 if __name__ == "__main__":

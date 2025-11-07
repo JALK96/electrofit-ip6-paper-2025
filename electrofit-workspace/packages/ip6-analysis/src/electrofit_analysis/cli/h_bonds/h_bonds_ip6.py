@@ -1035,7 +1035,9 @@ def _determine_hbond_command() -> str:
     return "gmx hbond"
 
 
-def main(project_dir: str, viz: bool = False) -> None:
+from electrofit_analysis.cli.common import resolve_stage
+
+def main(project_dir: str, viz: bool = False, stage: str = 'final') -> None:
     """Run hydrogen bond analysis for all molecules in the project's process directory.
 
     Args:
@@ -1049,6 +1051,7 @@ def main(project_dir: str, viz: bool = False) -> None:
         return
 
     # Loop through each subdirectory in the process directory
+    run_dir_name, analyze_base = resolve_stage(stage)
     for folder_name in os.listdir(process_dir):
         folder_path = os.path.join(process_dir, folder_name)
         print(f"Running hydrogen bond analysis for: {folder_name}")
@@ -1056,14 +1059,12 @@ def main(project_dir: str, viz: bool = False) -> None:
         # Check if it's a directory
         if os.path.isdir(folder_path):
             
-            # Define the 'run_final_gmx_simulation' directory within this folder
-            run_final_sim_dir = os.path.join(folder_path, "run_final_gmx_simulation")
+            run_final_sim_dir = os.path.join(folder_path, run_dir_name)
             run_gau_create_gmx_in_dir = os.path.join(folder_path, "run_gau_create_gmx_in")
 
             # Check if 'run_final_gmx_simulation' exists
             if os.path.isdir(run_final_sim_dir):
-                # Define the destination directory 'analyze_final_sim' within the same working directory
-                dest_dir = os.path.join(folder_path, "analyze_final_sim")
+                dest_dir = os.path.join(folder_path, analyze_base)
                 dest_dir = os.path.join(dest_dir, "h_bonds")
                 os.makedirs(dest_dir, exist_ok=True)
                 os.chdir(dest_dir)

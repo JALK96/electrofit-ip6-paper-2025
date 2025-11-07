@@ -252,7 +252,9 @@ def print_donor_acceptor_table(species_id, data, logger, summary_format='arrow',
 # ------------------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------------------
-def main(hbond_type: str, project_root: str) -> None:
+from electrofit_analysis.cli.common import resolve_stage
+
+def main(hbond_type: str, project_root: str, stage: str = 'final') -> None:
     """Run H-bond comparison analysis across all species in <project_root>/process.
 
     Parameters
@@ -312,14 +314,15 @@ def main(hbond_type: str, project_root: str) -> None:
     sorted_species_list = [x[1] for x in folder_list]
 
     # 4) Loop over species => parse data
+    run_dir_name, analyze_base = resolve_stage(stage)
     for folder_name, species_id, n_ones in folder_list:
         folder_path = process_path / folder_name
 
         # Required files
-        hb_num_file = folder_path / "analyze_final_sim" / "h_bonds" / f"{hbond_type}_hb_num.xvg"
-        xpm_file    = folder_path / "analyze_final_sim" / "h_bonds" / f"{hbond_type}_hb_matrix.xpm"
-        dist_file   = folder_path / "analyze_final_sim" / "h_bonds" / f"{hbond_type}_hb_dist.xvg"
-        log_file    = folder_path / "analyze_final_sim" / "h_bonds" / f"{hbond_type}_hb.log"
+        hb_num_file = folder_path / analyze_base / "h_bonds" / f"{hbond_type}_hb_num.xvg"
+        xpm_file    = folder_path / analyze_base / "h_bonds" / f"{hbond_type}_hb_matrix.xpm"
+        dist_file   = folder_path / analyze_base / "h_bonds" / f"{hbond_type}_hb_dist.xvg"
+        log_file    = folder_path / analyze_base / "h_bonds" / f"{hbond_type}_hb.log"
 
         # Check existence
         if not (hb_num_file.is_file() and xpm_file.is_file() and dist_file.is_file() and log_file.is_file()):
