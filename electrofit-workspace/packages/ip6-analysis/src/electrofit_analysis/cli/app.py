@@ -363,7 +363,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Choose which H-bond matrices to use (default: intra).",
     )
     p_ppm.add_argument(
-        "-m",
         "--mode",
         choices=["union", "sum", "both"],
         default="union",
