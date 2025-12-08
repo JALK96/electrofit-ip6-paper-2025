@@ -59,6 +59,53 @@ class DerivedSimulation:
     log_lines: list[str] = field(default_factory=list)
 
 
+def _default_valence_map() -> dict[str, int]:
+    """Static valence mapping for common ions.
+
+    Sourced from your force field ions.itp and common MD ions.
+    """
+    return {
+        "IB+": +1,
+        "CA": +2,
+        "CL": -1,
+        "NA": +1,
+        "MG": +2,
+        "K": +1,
+        "RB": +1,
+        "CS": +1,
+        "LI": +1,
+        "ZN": +2,
+    }
+
+
+def _resolve_valences(cation: str, anion: str) -> tuple[int, int, list[str]]:
+    """Return (z_cation, z_anion, notes) from the static map with sanity checks."""
+    notes: list[str] = []
+    zmap = _default_valence_map()
+    cat_key = (cation or "").strip().upper()
+    an_key = (anion or "").strip().upper()
+    z_cat = zmap.get(cat_key, +1)
+    z_an = zmap.get(an_key, -1)
+    if cat_key not in zmap:
+        notes.append(f"Cation valence for '{cation}' not in map -> using {z_cat:+d}.")
+    if an_key not in zmap:
+        notes.append(f"Anion valence for '{anion}' not in map -> using {z_an:+d}.")
+    # Enforce conventional signs
+    if z_cat < 0:
+        z_cat = abs(z_cat)
+        notes.append("Cation valence negative -> coerced to positive.")
+    if z_an > 0:
+        z_an = -abs(z_an)
+        notes.append("Anion valence positive -> coerced to negative.")
+    if z_cat == 0:
+        z_cat = +1
+        notes.append("Cation valence 0 invalid -> coerced to +1.")
+    if z_an == 0:
+        z_an = -1
+        notes.append("Anion valence 0 invalid -> coerced to -1.")
+    return z_cat, z_an, notes
+
+
 def _has_target_payload(target: IonTargetSection | None) -> bool:
     return bool(
         target
@@ -111,6 +158,8 @@ def derive_simulation_settings(
 
     cation = ions_section.cation
     anion = ions_section.anion
+    # Determine ion valences (static map; no file I/O)
+    z_cat, z_an, z_notes = _resolve_valences(cation, anion)
 
     if not target_mode:
         # Salt-concentration mode (legacy behaviour)
@@ -131,7 +180,7 @@ def derive_simulation_settings(
             anion=anion,
             enforce_neutrality=ions_section.enforce_neutrality,
             salt_concentration=concentration,
-            notes=ion_notes,
+            notes=ion_notes + z_notes,
         )
         box_setup = BoxSetup(
             type=box_section.type,
@@ -174,24 +223,33 @@ def derive_simulation_settings(
     negative_count = negative_target.desired_count if negative_target else None
     ion_warnings: list[str] = []
     ion_notes: list[str] = []
+    ion_notes.extend(z_notes)
 
     if enforce:
-        expected_negative = positive_count + charge
+        # charge + z_cat*n_pos + z_an*n_neg = 0  ->  n_neg = -(charge + z_cat*n_pos)/z_an
+        numerator = -(charge + z_cat * positive_count)
+        expected_f = numerator / float(z_an)
+        expected_negative = int(round(expected_f))
+        if abs(expected_f - expected_negative) > 1e-8:
+            raise IonConfigError(
+                f"Neutrality requires a non-integer number of {anion} ions ({expected_f:.3f}) with valence {z_an:+d}."
+                " Adjust counts or ion species so neutrality is attainable."
+            )
         if expected_negative < 0:
             raise IonConfigError(
-                f"Neutrality would require {expected_negative} {anion} ions based on solute charge {charge},"
-                " which is impossible. Increase the positive ion count or adjust the solute charge."
+                f"Neutrality would require {expected_negative} {anion} ions (valence {z_an:+d}) based on solute charge {charge}"
+                f" and {positive_count} {cation} (valence {z_cat:+d}), which is impossible."
             )
         if negative_count is None:
             negative_count = expected_negative
             inferred_negative = True
             ion_notes.append(
-                f"Negative ion count inferred as {negative_count} from solute charge {charge}."
+                f"Negative ion count inferred as {negative_count} from charge {charge} with valences {cation}={z_cat:+d}, {anion}={z_an:+d}."
             )
         elif negative_count != expected_negative:
             raise IonConfigError(
-                f"Neutrality requires {expected_negative} {anion} ions (given {positive_count} {cation} and solute charge {charge}),"
-                f" but {negative_count} were specified. Update 'negative_ion.desired_count' to {expected_negative}."
+                f"Neutrality requires {expected_negative} {anion} ions (valence {z_an:+d}) given {positive_count} {cation} (valence {z_cat:+d})"
+                f" and solute charge {charge}, but {negative_count} were specified."
             )
     else:
         if negative_count is None:
@@ -199,7 +257,7 @@ def derive_simulation_settings(
             ion_warnings.append(
                 f"Neutrality disabled: inserting {positive_count} {cation} and no {anion}."
             )
-        net_charge = charge + positive_count - negative_count
+        net_charge = charge + z_cat * positive_count + z_an * negative_count
         if net_charge != 0:
             ion_warnings.append(
                 f"Resulting net system charge will be {net_charge:+d} e."  # sign display
@@ -228,7 +286,7 @@ def derive_simulation_settings(
         f"[config][derived] Ion mode: target (enforce_neutrality={enforce})"
     )
     log_lines.append(
-        f"[config][derived] Target counts -> {cation}: {positive_count}, {anion}: {negative_count}"
+        f"[config][derived] Target counts -> {cation}: {positive_count} (z={z_cat:+d}), {anion}: {negative_count} (z={z_an:+d})"
     )
     log_lines.append(
         f"[config][derived] Target concentration {positive_target.concentration} mol/L -> volume {volume_nm3:.3f} nm^3"

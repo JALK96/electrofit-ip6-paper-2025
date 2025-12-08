@@ -140,7 +140,7 @@ def run_command(command, cwd=None):
             stderr_text = "".join(stderr_accum).strip() or None
             logging.error(
                 f"Command exited with code {return_code}: {log_cmd}"
-                + (f" | stderr: {stderr_text[:400]}" if stderr_text else "")
+                + (f" | stderr: {stderr_text}" if stderr_text else "")
             )
             raise subprocess.CalledProcessError(return_code, log_cmd)
 

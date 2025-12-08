@@ -10,6 +10,7 @@ from typing import Tuple, Iterable
 
 from electrofit.config.loader import load_config, dump_config
 from electrofit.infra.config_snapshot import compose_snapshot
+from electrofit.io.ff import ensure_forcefield_installed
 from electrofit.adapters.gromacs import set_up_production
 
 __all__ = [
@@ -116,7 +117,17 @@ def launch_final_sim_run(
     box = sim.box
     ions = sim.ions
     runtime = cfg.gmx.runtime
-    ff = getattr(sim, 'forcefield', None) or "amber14sb.ff"
+    ff_attr = getattr(sim, 'forcefield', None)
+    ff_raw = ff_attr or "amber14sb.ff"
+    if isinstance(ff_raw, str) and (os.path.isabs(ff_raw) or os.sep in ff_raw or ff_raw.startswith(".")):
+        ff_abs = ff_raw if os.path.isabs(ff_raw) else os.path.join(str(project_root), ff_raw)
+        try:
+            ff = ensure_forcefield_installed(ff_abs)
+        except Exception as e:
+            logging.error("[step8][abort] %s", e)
+            return False, f"forcefield error: {e}"
+    else:
+        ff = ff_raw
     import os as _os
     prev = _os.getcwd()
     try:
@@ -131,6 +142,7 @@ def launch_final_sim_run(
             ff=ff,
             threads=runtime.threads,
             pin=runtime.pin,
+            gpu=runtime.gpu,
         )
     finally:
         _os.chdir(prev)

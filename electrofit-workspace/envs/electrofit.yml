@@ -11,6 +11,7 @@ dependencies:
   # ---- MD/chem stack ----
   - ambertools>=23,<25
   - gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
+  - gromacs_mpi # for REMD simulations
   - openbabel>=3.1
   - mdtraj
   - numpy

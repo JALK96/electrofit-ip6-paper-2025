@@ -32,7 +32,12 @@ def _cmd_distance(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project)
     only = parse_molecule_args(getattr(args, 'molecule', None))
-    distance_main(project, stage=getattr(args, 'stage', 'final'), only=only)
+    distance_main(
+        project,
+        stage=getattr(args, 'stage', 'final'),
+        only=only,
+        rep=getattr(args, 'rep', None),
+    )
 
 
 def _cmd_count(args: argparse.Namespace) -> None:
@@ -40,7 +45,12 @@ def _cmd_count(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project)
     only = parse_molecule_args(getattr(args, 'molecule', None))
-    count_main(project, stage=getattr(args, 'stage', 'final'), only=only)
+    count_main(
+        project,
+        stage=getattr(args, 'stage', 'final'),
+        only=only,
+        rep=getattr(args, 'rep', None),
+    )
 
 
 def _cmd_summarize_nap(args: argparse.Namespace) -> None:
@@ -112,6 +122,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rdf_y_max=args.rdf_y_max,
         plot_projection=args.plot_projection,
         rdf_data_path=args.rdf_data,
+        rep=getattr(args, 'rep', None),
     )
 
 
@@ -128,7 +139,12 @@ def _cmd_dihedrals(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project) if args.project else None
     only = parse_molecule_args(getattr(args, 'molecule', None))
-    dihedrals_main(project, stage=getattr(args, 'stage', 'final'), only=only)
+    dihedrals_main(
+        project,
+        stage=getattr(args, 'stage', 'final'),
+        only=only,
+        rep=getattr(args, 'rep', None),
+    )
 
 
 def _cmd_hbonds(args: argparse.Namespace) -> None:
@@ -136,7 +152,13 @@ def _cmd_hbonds(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project)
     only = parse_molecule_args(getattr(args, 'molecule', None))
-    hb_main(project, viz=args.viz, stage=getattr(args, 'stage', 'final'), only=only)
+    hb_main(
+        project,
+        viz=args.viz,
+        stage=getattr(args, 'stage', 'final'),
+        only=only,
+        rep=getattr(args, 'rep', None),
+    )
 
 
 def _cmd_pp_matrix(args: argparse.Namespace) -> None:
@@ -174,7 +196,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_dist.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
-    p_dist.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze 'final' (run_final_gmx_simulation) or 'sample' (run_gmx_simulation') trajectories.")
+    p_dist.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final (run_final_gmx_simulation), sample (run_gmx_simulation), or remd (run_remd_gmx_simulation) trajectories.",
+    )
+    p_dist.add_argument(
+        "--rep",
+        type=int,
+        default=None,
+        help="Replica index for stage=remd (e.g. 0..N-1).",
+    )
     p_dist.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated). Accepts 'IP_…' or bare names.")
     p_dist.set_defaults(func=_cmd_distance)
 
@@ -188,7 +221,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_count.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
-    p_count.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze 'final' (run_final_gmx_simulation) or 'sample' (run_gmx_simulation') trajectories.")
+    p_count.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final (run_final_gmx_simulation), sample (run_gmx_simulation), or remd (run_remd_gmx_simulation) trajectories.",
+    )
+    p_count.add_argument(
+        "--rep",
+        type=int,
+        default=None,
+        help="Replica index for stage=remd (e.g. 0..N-1).",
+    )
     p_count.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
     p_count.set_defaults(func=_cmd_count)
 
@@ -233,7 +277,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--coord-plots", default="box",
         help="Comma-separated plot types for coordination. Choices: box,stats. Default: box."
     )
-    p_sum.add_argument("--stage", choices=["final","sample"], default="final", help="Read from analyze_final_sim or analyze_sample_sim.")
+    p_sum.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Read from analyze_final_sim, analyze_sample_sim, or analyze_remd_sim.",
+    )
 
     p_sum.set_defaults(func=_cmd_summarize_nap)
 
@@ -266,7 +315,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="process",
         help="Relative subdirectory under the project root to traverse (default: process).",
     )
-    p_coord.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
+    p_coord.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final, sample, or REMD trajectories.",
+    )
+    p_coord.add_argument(
+        "--rep",
+        type=int,
+        default=None,
+        help="Replica index for stage=remd (e.g. 0..N-1).",
+    )
     p_coord.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
     p_coord.add_argument(
         "--determine-global-y",
@@ -320,7 +380,18 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         help="Project root (defaults to $ELECTROFIT_PROJECT_PATH or CWD if omitted).",
     )
-    p_dih.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
+    p_dih.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final, sample, or REMD trajectories.",
+    )
+    p_dih.add_argument(
+        "--rep",
+        type=int,
+        default=None,
+        help="Replica index for stage=remd (e.g. 0..N-1).",
+    )
     p_dih.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
     p_dih.set_defaults(func=_cmd_dihedrals)
 
@@ -338,7 +409,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate plots/figures (opt-in).",
     )
-    p_hb.add_argument("--stage", choices=["final","sample"], default="final", help="Analyze final or sample trajectories.")
+    p_hb.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final, sample, or REMD trajectories.",
+    )
+    p_hb.add_argument(
+        "--rep",
+        type=int,
+        default=None,
+        help="Replica index for stage=remd (e.g. 0..N-1).",
+    )
     p_hb.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
     p_hb.set_defaults(func=_cmd_hbonds)
 
@@ -353,7 +435,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ppm.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
-    p_ppm.add_argument("--stage", choices=["final","sample"], default="final", help="Read HBonds outputs from analyze_final_sim or analyze_sample_sim.")
+    p_ppm.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Read HBonds outputs from analyze_final_sim, analyze_sample_sim, or analyze_remd_sim.",
+    )
     p_ppm.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
     p_ppm.add_argument(
         "-k",
@@ -392,7 +479,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_hbc.add_argument(
         "-p", "--project", required=True, help="Path to the project root directory."
     )
-    p_hbc.add_argument("--stage", choices=["final","sample"], default="final", help="Read HBonds outputs from analyze_final_sim or analyze_sample_sim.")
+    p_hbc.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Read HBonds outputs from analyze_final_sim, analyze_sample_sim, or analyze_remd_sim.",
+    )
     p_hbc.add_argument(
         "-t",
         "--type",

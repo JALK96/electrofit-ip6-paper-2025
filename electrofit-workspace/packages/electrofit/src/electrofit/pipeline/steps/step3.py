@@ -172,6 +172,7 @@ def main():  # pragma: no cover
                 ff=ff,
                 threads=threads,
                 pin=pin,
+                gpu=getattr(runtime_local, "gpu", None) if runtime_local else None,
             )
             ran += 1
 

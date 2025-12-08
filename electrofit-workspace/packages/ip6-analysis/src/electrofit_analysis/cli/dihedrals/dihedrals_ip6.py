@@ -24,7 +24,11 @@ from electrofit_analysis.viz.dihedral_helpers import (
 )
 
 from electrofit_analysis.structure.util.common_util import ensure_dir
-from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
+from electrofit_analysis.cli.common import (
+    resolve_stage,
+    normalize_micro_name,
+    resolve_run_and_analyze_dirs,
+)
 
 # -----------------------
 # Global style / config
@@ -42,7 +46,14 @@ cf.dark_gray = "dimgray"
 # -----------------------
 # Domain: Discovery & IO
 # -----------------------
-def iter_molecule_process_dirs(project_path: Path, run_dir_name: str, analyze_base: str, only: set[str] | None = None) -> Iterable[Tuple[str, Path, Path]]:
+def iter_molecule_process_dirs(
+    project_path: Path,
+    run_dir_name: str,
+    analyze_base: str,
+    stage: str,
+    rep: int | None,
+    only: set[str] | None = None,
+) -> Iterable[Tuple[str, Path, Path]]:
     """
     Yield (species_id, run_final_dir, analyze_dir) for each molecule under project/process/*.
     """
@@ -54,16 +65,23 @@ def iter_molecule_process_dirs(project_path: Path, run_dir_name: str, analyze_ba
         if only_norm and entry.name not in only_norm:
             continue
         species_id = entry.name.replace("IP_", "")
-        run_dir = entry / run_dir_name
+        run_dir, analyze_dir_base = resolve_run_and_analyze_dirs(
+            entry, stage, run_dir_name, analyze_base, rep
+        )
         if not run_dir.is_dir():
             continue
-        analyze_dir = entry / analyze_base / "dihedral"
+        analyze_dir = analyze_dir_base / "dihedral"
         yield species_id, run_dir, analyze_dir
 
 
-def load_universe(run_dir: Path) -> mda.Universe:
-    gro = run_dir / "md.gro"
-    xtc = run_dir / "md_center.xtc"
+def load_universe(run_dir: Path, stage: str) -> mda.Universe:
+    stage_norm = (stage or "final").strip().lower()
+    if stage_norm == "remd":
+        gro = run_dir / "remd.gro"
+        xtc = run_dir / "remd_center.xtc"
+    else:
+        gro = run_dir / "md.gro"
+        xtc = run_dir / "md_center.xtc"
     if not gro.is_file() or not xtc.is_file():
         raise FileNotFoundError(f"Missing md.gro or md_center.xtc in {run_dir}")
     return mda.Universe(str(gro), str(xtc))
@@ -195,7 +213,9 @@ def group_dihedral_positions(dihedral_group_indices: List[int], n_groups: int) -
 # -----------------------
 def process_one_molecule(logger: logging.Logger, project_path: Path, species_id: str, run_dir: Path, outdir: Path):
     ensure_dir(outdir)
-    u = load_universe(run_dir)
+    # infer stage from run_dir name: if it contains 'run_remd_gmx_simulation', treat as REMD
+    stage = "remd" if "run_remd_gmx_simulation" in str(run_dir) else "final"
+    u = load_universe(run_dir, stage)
 
     groups = dihedral_groups_spec()
     dihedral_definitions, dihedral_group_indices, _group_names = flatten_groups(groups)
@@ -220,13 +240,18 @@ def process_one_molecule(logger: logging.Logger, project_path: Path, species_id:
     logger.info("Finished plots for %s", species_id)
 
 
-def main(project_path_str: str | None = None, stage: str = 'final', only: set[str] | None = None):
-
-
+def main(
+    project_path_str: str | None = None,
+    stage: str = 'final',
+    only: set[str] | None = None,
+    rep: int | None = None,
+):
     project_path = Path(project_path_str or PROJECT_PATH).resolve()
 
     run_dir_name, analyze_base = resolve_stage(stage)
-    for species_id, run_dir, outdir in iter_molecule_process_dirs(project_path, run_dir_name, analyze_base, only=only):
+    for species_id, run_dir, outdir in iter_molecule_process_dirs(
+        project_path, run_dir_name, analyze_base, stage, rep, only=only
+    ):
         log_path = outdir / "dihedrals.log"
         setup_logging(log_path=log_path)
         logger = logging.getLogger(__name__)

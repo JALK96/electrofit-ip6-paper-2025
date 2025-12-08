@@ -12,7 +12,9 @@ dependencies:
   # ---- MD/chem stack ----
   - ambertools>=23,<25
   - openbabel>=3.1
-  - gromacs
+  - gromacs=2021.1 # same version as gmx_mpi provided by conda
+  #- gromacs=2022.4 # for MacOS Arm remove and install via Homebrew
+  - gromacs_mpi # for REMD simulations; version 2021.1-MODIFIED
   - mdtraj
   - mdanalysis
   - rdkit

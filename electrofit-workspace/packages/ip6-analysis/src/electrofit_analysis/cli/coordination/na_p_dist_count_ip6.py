@@ -2,11 +2,16 @@ import logging
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
+from electrofit_analysis.cli.common import (
+    resolve_stage,
+    normalize_micro_name,
+    resolve_run_and_analyze_dirs,
+)
 from electrofit.infra.logging import setup_logging
 from electrofit_analysis.structure.util.common_gmx import (
     create_index_file,
@@ -233,7 +238,7 @@ def plot_excess_ion_counts_subplots(
 # Main Execution Flow
 # ----------------------------
 
-def main(project_dir: str, stage: str = 'final', only=None) -> None:
+def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = None) -> None:
     """Run Na–P distance and ion-count analysis for all molecules under project_dir.
 
     Args:
@@ -251,20 +256,26 @@ def main(project_dir: str, stage: str = 'final', only=None) -> None:
             if only_norm and folder_name not in only_norm:
                 continue
             run_dir_name, analyze_base = resolve_stage(stage)
-            run_sim_dir = os.path.join(folder_path, run_dir_name)
+            run_sim_dir, analyze_base_dir = resolve_run_and_analyze_dirs(
+                Path(folder_path), stage, run_dir_name, analyze_base, rep
+            )
 
             if os.path.isdir(run_sim_dir):
                 # Define the destination directory based on stage
-                dest_dir = os.path.join(folder_path, analyze_base)
-                dest_dir = os.path.join(dest_dir, "NaP_dist_count")
+                dest_dir = os.path.join(analyze_base_dir, "NaP_dist_count")
 
                 os.makedirs(dest_dir, exist_ok=True)
                 os.chdir(dest_dir)
 
                 # Define paths (adjust these as necessary)
-                structure_file = os.path.join(run_sim_dir, "md.gro")
-                trajectory_file = os.path.join(run_sim_dir, "md_center.xtc")
-                topology_file = os.path.join(run_sim_dir, "md.tpr")
+                if stage.strip().lower() == "remd":
+                    structure_file = os.path.join(run_sim_dir, "remd.gro")
+                    trajectory_file = os.path.join(run_sim_dir, "remd_center.xtc")
+                    topology_file = os.path.join(run_sim_dir, "remd.tpr")
+                else:
+                    structure_file = os.path.join(run_sim_dir, "md.gro")
+                    trajectory_file = os.path.join(run_sim_dir, "md_center.xtc")
+                    topology_file = os.path.join(run_sim_dir, "md.tpr")
                 index_file = os.path.join(dest_dir, "NA_P_index.ndx")
                 selection_group = "NA"
                 # We'll produce distances like distances_NaP1.xvg -> distances_NaP6.xvg

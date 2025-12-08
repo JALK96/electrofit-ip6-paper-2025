@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from itertools import combinations
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1035,9 +1036,14 @@ def _determine_hbond_command() -> str:
     return "gmx hbond"
 
 
-from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
+from electrofit_analysis.cli.common import (
+    resolve_stage,
+    normalize_micro_name,
+    resolve_run_and_analyze_dirs,
+)
 
-def main(project_dir: str, viz: bool = False, stage: str = 'final', only=None) -> None:
+
+def main(project_dir: str, viz: bool = False, stage: str = 'final', only=None, rep: int | None = None) -> None:
     """Run hydrogen bond analysis for all molecules in the project's process directory.
 
     Args:
@@ -1061,19 +1067,24 @@ def main(project_dir: str, viz: bool = False, stage: str = 'final', only=None) -
         if os.path.isdir(folder_path):
             if only_norm and folder_name not in only_norm:
                 continue
-            
-            run_final_sim_dir = os.path.join(folder_path, run_dir_name)
+
+            run_final_sim_dir, analyze_base_dir = resolve_run_and_analyze_dirs(
+                Path(folder_path), stage, run_dir_name, analyze_base, rep
+            )
             run_gau_create_gmx_in_dir = os.path.join(folder_path, "run_gau_create_gmx_in")
 
-            # Check if 'run_final_gmx_simulation' exists
+            # Check if run dir exists
             if os.path.isdir(run_final_sim_dir):
-                dest_dir = os.path.join(folder_path, analyze_base)
-                dest_dir = os.path.join(dest_dir, "h_bonds")
+                dest_dir = os.path.join(analyze_base_dir, "h_bonds")
                 os.makedirs(dest_dir, exist_ok=True)
                 os.chdir(dest_dir)
 
-                gro_file_path = os.path.join(run_final_sim_dir, "md.tpr")
-                xtc_file_path = os.path.join(run_final_sim_dir, "md_center.xtc")
+                if stage.strip().lower() == "remd":
+                    gro_file_path = os.path.join(run_final_sim_dir, "remd.tpr")
+                    xtc_file_path = os.path.join(run_final_sim_dir, "remd_center.xtc")
+                else:
+                    gro_file_path = os.path.join(run_final_sim_dir, "md.tpr")
+                    xtc_file_path = os.path.join(run_final_sim_dir, "md_center.xtc")
 
                 print(f"reading gro file: {gro_file_path}")
                 print(f"reading xtc file: {xtc_file_path}")

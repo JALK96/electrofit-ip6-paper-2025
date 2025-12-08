@@ -100,6 +100,7 @@ def set_up_production(
     ff="amber14sb.ff",
     threads: int | None = None,
     pin: bool | None = None,
+    gpu: bool | None = None,
 ):
     """Set up und führe eine Produktions‑MD mit GROMACS aus (migrierte Version)."""
     fullpath = os.getcwd()
@@ -207,6 +208,8 @@ def set_up_production(
                     flags += ["-ntmpi", "1"]
             if pin is not None:
                 flags += ["-pin", "on" if pin else "off"]
+            if gpu:
+                flags += ["-nb", "gpu"]
             flags.append("-nobackup")
             return " ".join(flags)
 

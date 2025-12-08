@@ -163,24 +163,41 @@ def include_ff(file_path, forcefield="amber14sb.ff"):
         # Define the lines to insert
         include_comment = "; Include forcefield\n"
         include_line = f'#include "{forcefield}/forcefield.itp"\n'
+        include_target = f"{forcefield}/forcefield.itp"
 
-        # Check if the include line already exists to prevent duplication
-        if any(forcefield in line and "forcefield.itp" in line for line in lines):
+        def _extract_target(line: str) -> str | None:
+            if "forcefield.itp" not in line:
+                return None
+            parts = line.replace("#include", "").strip().split()
+            if not parts:
+                return None
+            # last token should be the path, possibly quoted
+            return parts[-1].strip('"')
+
+        # If a forcefield include exists but points elsewhere, replace it
+        existing_idx = next((i for i, line in enumerate(lines) if "forcefield.itp" in line), None)
+        if existing_idx is not None:
+            current = _extract_target(lines[existing_idx])
+            if current == include_target:
+                logging.info(
+                    f'"{forcefield}/forcefield.itp" is already included in {file_path}.'
+                )
+                return
+            lines[existing_idx] = include_line
+            if existing_idx == 0 or "Include forcefield" not in lines[existing_idx - 1]:
+                lines.insert(existing_idx, include_comment)
             logging.info(
-                f'"{forcefield}/forcefield.itp" is already included in {file_path}.'
+                f"Replaced existing forcefield include with '{forcefield}/forcefield.itp' in {file_path}."
             )
-            return
-
-        # Insert the include lines as the second and third lines
-        if lines:
-            lines.insert(1, include_comment)
-            lines.insert(2, include_line)
         else:
-            # If the file is empty, add the include lines at the beginning
-            lines.append(include_comment)
-            lines.append(include_line)
+            # Insert the include lines as the second and third lines (or at start if empty)
+            if lines:
+                lines.insert(1, include_comment)
+                lines.insert(2, include_line)
+            else:
+                lines.append(include_comment)
+                lines.append(include_line)
 
-        # Write the updated content back to the file
         with open(file_path, "w") as file:
             file.writelines(lines)
 

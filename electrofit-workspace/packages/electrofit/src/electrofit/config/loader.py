@@ -50,10 +50,23 @@ class PathsSection:
 class GromacsRuntimeSection:
     threads: int = 16
     pin: bool = True
+    gpu: bool = False
 
 @dataclass
 class GMXSection:
     runtime: GromacsRuntimeSection = field(default_factory=GromacsRuntimeSection)
+
+@dataclass
+class RemdSection:
+    enabled: bool = False
+    nreplicas: int = 16
+    tmin: float = 300.0
+    tmax: float = 420.0
+    spacing: str = "geometric"  # or "list"
+    temperatures: list[float] | None = None
+    replex: int = 100
+    mdp_template: str = "REMD.mdp"
+    mpi_ranks: int | None = None   # ranks for mpirun; defaults to nreplicas
 
 # Simulation parameters (Step 3)
 @dataclass
@@ -95,6 +108,7 @@ class Config:
     paths: PathsSection = field(default_factory=PathsSection)
     gmx: GMXSection = field(default_factory=GMXSection)
     simulation: SimulationSection = field(default_factory=SimulationSection)
+    remd: RemdSection = field(default_factory=RemdSection)
 
 
 # -----------------
@@ -281,7 +295,7 @@ def load_config(
         data["gmx"] = data.pop("gromacs")
 
     # Perform merges
-    for section_name in ("project", "symmetry", "paths", "gmx", "simulation"):
+    for section_name in ("project", "symmetry", "paths", "gmx", "simulation", "remd"):
         payload = data.get(section_name, {})
         section = getattr(cfg, section_name)
         if isinstance(payload, dict):

@@ -38,8 +38,11 @@ from electrofit_analysis.viz.coord_helpers import (
     )
 
 import seaborn as sns
-from electrofit_analysis.cli.common import resolve_stage
-from electrofit_analysis.cli.common import normalize_micro_name
+from electrofit_analysis.cli.common import (
+    resolve_stage,
+    normalize_micro_name,
+    resolve_run_and_analyze_dirs,
+)
 sns.set_context("talk")
 
 # ╔═══════════════════════════════════════════════════════════════╗
@@ -208,6 +211,7 @@ def main(
     rdf_y_max: float | None = None,
     plot_projection: bool = False,
     rdf_data_path: str | None = None,
+    rep: int | None = None,
 ) -> None:
     """Run coordination analysis across micro-states.
 
@@ -288,18 +292,24 @@ def main(
             if only_norm and microstate.name not in only_norm:
                 continue
 
-            run_dir = microstate / run_dir_name
+            run_dir, analyze_base_dir = resolve_run_and_analyze_dirs(
+                microstate, stage, run_dir_name, analyze_base, rep
+            )
             if not run_dir.is_dir():
                 logging.debug("Skipping %s (no %s)", microstate.name, run_dir_name)
                 continue
 
-            traj = run_dir / "md_center.xtc"
-            top = run_dir / "md.tpr"
+            if stage.strip().lower() == "remd":
+                traj = run_dir / "remd_center.xtc"
+                top = run_dir / "remd.tpr"
+            else:
+                traj = run_dir / "md_center.xtc"
+                top = run_dir / "md.tpr"
             if not traj.is_file() or not top.is_file():
                 logging.warning("Missing files in %s – skipped.", run_dir)
                 continue
 
-            dest_dir = microstate / analyze_base / "NaP_coordination"
+            dest_dir = analyze_base_dir / "NaP_coordination"
             dest_dir.mkdir(exist_ok=True)
             logfile = dest_dir / "NaP_coordination.log"
             setup_logging(logfile)

@@ -16,6 +16,8 @@ STEP_MODULES = {
     "step6": "electrofit.pipeline.steps.step6",
     "step7": "electrofit.pipeline.steps.step7",
     "step8": "electrofit.pipeline.steps.step8",
+    "step7remd": "electrofit.pipeline.steps.step7remd",
+    "step8remd": "electrofit.pipeline.steps.step8remd",
 }
 
 def _run_module(module: str, project: Path, config: Path | None, rest: list[str]):
@@ -56,6 +58,8 @@ def main():
         'step6': 'Charge aggregation: compute ensemble averages, optional symmetry/group averaging, update MOL2 & acpype (experimental --remove-outlier).',
         'step7': 'Simulation setup: create run_final_gmx_simulation folders, stage GMX topology + MDP templates.',
         'step8': 'Production MD (GROMACS): build box, solvate, ions, EM/NVT/NPT, production trajectory per molecule, using parameterized charges (from step6 - charge aggregation).',
+        'step7remd': 'REMD setup: create run_remd_gmx_simulation folders, stage ACPYPE + MDP (with REMD.mdp).',
+        'step8remd': 'REMD prepare/launch: equilibrate (EM/NVT/NPT), generate remd*.tpr, write run_remd.sh, optionally launch.',
     }
     def add_cmd(name: str):
         sp = sub.add_parser(name, help=DESCRIPTIONS.get(name,''), description=DESCRIPTIONS.get(name,''))
