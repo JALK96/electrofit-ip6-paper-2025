@@ -123,6 +123,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         plot_projection=args.plot_projection,
         rdf_data_path=args.rdf_data,
         rep=getattr(args, 'rep', None),
+        boxplot=getattr(args, 'boxplot', True),
     )
 
 
@@ -348,6 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--rdf-data",
         default=None,
         help="Path to an RDF cache file (JSON). Reuse or refresh cached RDF curves.",
+    )
+    p_coord.add_argument(
+        "--no-boxplot",
+        dest="boxplot",
+        action="store_false",
+        help="Skip the per-microstate coordination boxplot.",
     )
     p_coord.set_defaults(func=_cmd_coordination)
 

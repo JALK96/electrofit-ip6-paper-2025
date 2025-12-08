@@ -32,6 +32,7 @@ from MDAnalysis.analysis.rdf import InterRDF
 from electrofit.infra.logging import setup_logging
 from electrofit_analysis.viz.coord_helpers import (
     plot_counts_subplots, 
+    plot_coordination_boxplot,
     plot_frame_network_3d_fixed_view, 
     plot_frame_network_plane, 
     plot_rdf_periphO_Na
@@ -82,6 +83,7 @@ def analyse_one_microstate(
         rdf_y_max_global: float = None,
         plot_projection: bool = False,
         precomputed_rdf: dict[str, Tuple[np.ndarray, np.ndarray]] | None = None,
+        produce_boxplot: bool = True,
 ) -> None:
     """
     For a single trajectory/topology pair:
@@ -167,6 +169,13 @@ def analyse_one_microstate(
         out_png  = dest_dir / PLOT_NAME_TEMPLATE,
         title    = f"Na⁺ coordination counts – {dest_dir.parent.name}",
     )
+    if produce_boxplot:
+        boxplot_path = dest_dir / "NaP_coordination_boxplot.pdf"
+        plot_coordination_boxplot(
+            counts_ts=counts_ts,
+            out_png=boxplot_path,
+            showfliers=True,
+        )
     if plot_projection: 
         snapshot_png = dest_dir / "network_frame_3d.png"
         plot_frame_network_3d_fixed_view(u, frame=521, out_png=snapshot_png, r_cut_nm=r_cut_nm)
@@ -212,6 +221,7 @@ def main(
     plot_projection: bool = False,
     rdf_data_path: str | None = None,
     rep: int | None = None,
+    boxplot: bool = True,
 ) -> None:
     """Run coordination analysis across micro-states.
 
@@ -409,6 +419,7 @@ def main(
             rdf_y_max_global = effective_y_max,
             plot_projection = plot_projection,
             precomputed_rdf = rdf_override,
+            produce_boxplot = boxplot,
         )
 
 if __name__ == "__main__":
@@ -448,13 +459,20 @@ if __name__ == "__main__":
         action="store_true",
         help="Also generate 2D/3D network projection snapshots.",
     )
+    parser.add_argument(
+        "--no-boxplot",
+        dest="boxplot",
+        action="store_false",
+        help="Skip the per-microstate coordination boxplot.",
+    )
     args = parser.parse_args()
 
     main(
-        os.path.abspath(args.project),
-        args.subdir,
-        args.determine_global_y,
-        args.rdf_y_max,
-        args.plot_projection,
-        args.rdf_data,
+        project_dir=os.path.abspath(args.project),
+        subdir=args.subdir,
+        determine_global_y=args.determine_global_y,
+        rdf_y_max=args.rdf_y_max,
+        plot_projection=args.plot_projection,
+        rdf_data_path=args.rdf_data,
+        boxplot=args.boxplot,
     )

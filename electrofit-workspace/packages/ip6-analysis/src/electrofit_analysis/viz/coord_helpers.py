@@ -9,13 +9,14 @@ from MDAnalysis.lib.distances import distance_array         #  (https://userguid
 from MDAnalysis.analysis.rdf import InterRDF
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from typing import Optional
 from mpl_toolkits.mplot3d import Axes3D
 sns.set_context("talk")
 
-RCUTOFF_NM         = 0.32       # coordination threshold  (change if desired)
+RCUTOFF_NM         = 0.3       # coordination threshold  (change if desired)
 
 # Mapping: phosphate → peripheral O atom names (no ester O)
 PHOS_OXYGENS: Dict[str, Tuple[str, ...]] = {
@@ -67,6 +68,102 @@ def plot_counts_subplots(
     fig.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
     logging.info("Plot written to %s", out_png)
+
+
+def plot_coordination_boxplot(
+        counts_ts: np.ndarray,          # shape (6, n_frames)
+        out_png: pathlib.Path,
+        *,
+        showfliers: bool = True,
+        binary_code: Optional[str] = None,
+        ylabel: str = "Na⁺ count",
+) -> None:
+    """
+    Boxplot of Na⁺ coordination counts per phosphate for one microstate.
+
+    Styling and colour cues are lifted from the summarize-nap boxplots:
+    boxes corresponding to a "1" bit in the microstate code are shaded blue.
+    """
+    if counts_ts.ndim != 2 or counts_ts.shape[0] != len(PHOS_LABELS):
+        raise ValueError("counts_ts must have shape (6, n_frames)")
+
+    # infer binary code from output path if not provided explicitly
+    if binary_code is None:
+        try:
+            binary_code = out_png.parents[2].name
+            if binary_code.startswith("IP_"):
+                binary_code = binary_code[3:]
+        except Exception:
+            binary_code = "000000"
+    if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
+        raise ValueError(f"Unexpected binary code '{binary_code}' in output path")
+    colours = ["blue" if bit == "1" else "black" for bit in binary_code]
+
+    per_phos = [np.asarray(counts_ts[i], dtype=float) for i in range(len(PHOS_LABELS))]
+
+    # determine y-limits from whiskers (like summarize_nap)
+    whisk_lows, whisk_highs = [], []
+    for arr in per_phos:
+        if arr.size == 0:
+            continue
+        q1, q3 = np.percentile(arr, (25, 75))
+        iqr = q3 - q1
+        arr_f = arr.astype(float, copy=False)
+        lw_cand = arr_f[arr_f >= q1 - 1.5 * iqr]
+        hw_cand = arr_f[arr_f <= q3 + 1.5 * iqr]
+        if lw_cand.size:
+            whisk_lows.append(lw_cand.min())
+        if hw_cand.size:
+            whisk_highs.append(hw_cand.max())
+
+    if whisk_lows and whisk_highs:
+        ymin, ymax = float(min(whisk_lows)), float(max(whisk_highs))
+        pad = 0.05 * (ymax - ymin if ymax > ymin else 1.0)
+        ymin -= pad
+        ymax += pad
+    else:
+        ymin, ymax = 0.0, 1.0
+
+    fig, ax = plt.subplots(figsize=(5.5, 3.8))
+    bp = ax.boxplot(
+        per_phos,
+        positions=range(1, 7),
+        widths=0.6,
+        showfliers=showfliers,
+        patch_artist=True,
+        medianprops={"visible": False},
+        showmeans=True,
+        meanprops={
+            "marker": "D",
+            "markeredgecolor": "black",
+            "markerfacecolor": "black",
+            "markersize": 6,
+        },
+    )
+    # edge and face colouring per phosphate bit
+    for idx, box in enumerate(bp["boxes"]):
+        box.set_edgecolor("black")
+        if colours[idx] == "blue":
+            box.set_facecolor(to_rgba("blue", alpha=0.3))
+        else:
+            box.set_facecolor("white")
+    for element in ("whiskers", "caps"):
+        for obj in bp[element]:
+            obj.set_color("black")
+
+    ax.set_xticks(range(1, 7))
+    ax.set_xticklabels(PHOS_LABELS_CORRECTED, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_ylim(ymin, ymax)
+    ax.tick_params(axis="y", labelsize=12)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_title(binary_code, fontsize=14)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    logging.info("Coordination boxplot written to %s", out_png)
 
 
 # ┃                 RDF  of Na⁺ vs. peripheral O                  ┃
@@ -132,8 +229,8 @@ def plot_rdf_periphO_Na(
         nbins: int   = 240,      # → dr ≈ 0.005 nm
         *,
         y_max_global: Optional[float] = None,
-        hide_y_label: bool = True,
-        hide_y_ticklabels: bool = True,
+        hide_y_label: bool = False,
+        hide_y_ticklabels: bool = False,
         show_shell_cutoff: bool = False,
         rdf_results_override: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> None:
@@ -203,8 +300,8 @@ def plot_rdf_periphO_Na(
         # ---- figure & axes --------------------------------------------------
         sns.set_context("talk")
         n = len(PHOS_LABELS)
-        #fig, axes = plt.subplots(n, 1, figsize=(6, 1.2 * n), sharex=True, sharey=True)
-        fig, axes = plt.subplots(n, 1, figsize=(4.5, 1.2 * n), sharex=True, sharey=True)
+        fig, axes = plt.subplots(n, 1, figsize=(6, 1.2 * n), sharex=True, sharey=True)
+        #fig, axes = plt.subplots(n, 1, figsize=(4.5, 1.2 * n), sharex=True, sharey=True)
 
         # ---- binary code → colours -----------------------------------------
         try:
@@ -218,7 +315,7 @@ def plot_rdf_periphO_Na(
         colours = ["blue" if bit == "1" else "black" for bit in binary_code]
 
         # ---- constants for inset -------------------------------------------
-        X_LOWER, X_UPPER = 0.32, 1.2     # nm
+        X_LOWER, X_UPPER = RCUTOFF_NM, 1.2     # nm
 
         # ---- loop over P1–P6 ------------------------------------------------
         for ax, (label, col) in zip(axes, zip(PHOS_LABELS, colours)):
