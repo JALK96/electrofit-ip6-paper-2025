@@ -3,14 +3,14 @@
 Na_IP6_coordination.py (CLI)
 
 Iterates micro-state folders under a project's process directory, builds a
-Boolean coordination tensor (N_Na, 6, N_frames) indicating whether each Na⁺ is
-closer than RCUTOFF to any peripheral oxygen of P1..P6, aggregates to
+Boolean coordination tensor (N_ion, 6, N_frames) indicating whether each cation
+is closer than RCUTOFF to any peripheral oxygen of P1..P6, aggregates to
 time-series counts, and produces plots.
 
 CLI usage:
     python -m electrofit_analysis.cli.coordination.Na_IP6_coordination \
             --project /path/to/project [--subdir process] [--determine-global-y] \
-            [--rdf-y-max 1800] [--plot-projection]
+            [--rdf-y-max 1800] [--plot-projection] [--ion-name K]
 
 Outputs are written per microstate into analyze_final_sim/NaP_coordination/.
 
@@ -84,6 +84,8 @@ def analyse_one_microstate(
         plot_projection: bool = False,
         precomputed_rdf: dict[str, Tuple[np.ndarray, np.ndarray]] | None = None,
         produce_boxplot: bool = True,
+        ion_name: str = "NA",
+        ion_label: str | None = None,
 ) -> None:
     """
     For a single trajectory/topology pair:
@@ -93,13 +95,15 @@ def analyse_one_microstate(
     """
 
     # ── Load MD trajectory ───────────────────────────────────
+    ion_name = ion_name.upper()
+    ion_label = ion_label or f"{ion_name}⁺"
     u = mda.Universe(top_file.as_posix(), traj_file.as_posix())
-    na_atoms = u.select_atoms("name NA")
+    na_atoms = u.select_atoms(f"name {ion_name}")
     n_na = len(na_atoms)
     if n_na == 0:
-        logging.warning("No Na⁺ atoms found – skipped.")
+        logging.warning("No %s atoms found – skipped.", ion_label)
         return
-    logging.info("Loaded %d Na⁺ atoms and %d frames", n_na, len(u.trajectory))
+    logging.info("Loaded %d %s atoms and %d frames", n_na, ion_label, len(u.trajectory))
 
     print("Unique atom names in IP6:")
     print(sorted(set(u.select_atoms("resname I*").names)))
@@ -167,7 +171,8 @@ def analyse_one_microstate(
         counts_ts=counts_ts,
         timestep_ps=u.trajectory.dt,
         out_png  = dest_dir / PLOT_NAME_TEMPLATE,
-        title    = f"Na⁺ coordination counts – {dest_dir.parent.name}",
+        title    = f"{ion_label} coordination counts – {dest_dir.parent.name}",
+        ion_label=ion_label,
     )
     if produce_boxplot:
         boxplot_path = dest_dir / "NaP_coordination_boxplot.pdf"
@@ -175,14 +180,19 @@ def analyse_one_microstate(
             counts_ts=counts_ts,
             out_png=boxplot_path,
             showfliers=True,
+            ion_label=ion_label,
+            ylabel=f"{ion_label} count",
         )
     if plot_projection: 
         snapshot_png = dest_dir / "network_frame_3d.png"
-        plot_frame_network_3d_fixed_view(u, frame=521, out_png=snapshot_png, r_cut_nm=r_cut_nm)
+        plot_frame_network_3d_fixed_view(
+            u, frame=521, out_png=snapshot_png, r_cut_nm=r_cut_nm, ion_name=ion_name, ion_label=ion_label
+        )
         snapshot_png = dest_dir / "network_frame.png"
         plot_frame_network_plane(
             u, frame=525, out_png=snapshot_png,
-            reference_triplet=("C", "C2", "C4"), r_cut_nm=r_cut_nm
+            reference_triplet=("C", "C2", "C4"), r_cut_nm=r_cut_nm,
+            ion_name=ion_name, ion_label=ion_label,
         )
 
     rdf_png = dest_dir / "rdf_Na_periphO.pdf"
@@ -195,6 +205,8 @@ def analyse_one_microstate(
             nbins=240,
             y_max_global=rdf_y_max_global,
             rdf_results_override=precomputed_rdf,
+            ion_name=ion_name,
+            ion_label=ion_label,
         )
     else:
         plot_rdf_periphO_Na(
@@ -204,6 +216,8 @@ def analyse_one_microstate(
             nbins=240,
             y_max_global=1800.0,
             rdf_results_override=precomputed_rdf,
+            ion_name=ion_name,
+            ion_label=ion_label,
         )
 
     logging.info("Finished %s", dest_dir.parent.name)
@@ -222,6 +236,7 @@ def main(
     rdf_data_path: str | None = None,
     rep: int | None = None,
     boxplot: bool = True,
+    ion_name: str = "NA",
 ) -> None:
     """Run coordination analysis across micro-states.
 
@@ -242,12 +257,16 @@ def main(
         previously computed RDF curves (and the corresponding global y-limit)
         instead of recomputing them from scratch. When combined with
         ``--determine-global-y`` the cache is refreshed/created.
+    ion_name : str
+        Atom name of the cation to analyse (e.g. "NA", "K").
     """
     project_path = pathlib.Path(project_dir).resolve()
     process_dir  = project_path / subdir
     run_dir_name, analyze_base = resolve_stage(stage)
     print(f"Process Dir: {process_dir}")
     only_norm = {normalize_micro_name(x) for x in only} if only else None
+    ion_name = ion_name.upper()
+    ion_label = f"{ion_name}⁺"
 
     rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
     rdf_cache_path = pathlib.Path(rdf_data_path).resolve() if rdf_data_path else None
@@ -268,21 +287,30 @@ def main(
             Y_GLOBAL_MAX = float(meta["global_y"])
         except KeyError as exc:
             raise KeyError(f"Missing 'global_y' in RDF cache {rdf_cache_path}") from exc
-        cached_data = payload.get("data", {})
-        rdf_cache_arrays = {
-            micro: {
-                label: (
-                    np.asarray(entry["r"], dtype=float),
-                    np.asarray(entry["g"], dtype=float),
-                )
-                for label, entry in micro_dict.items()
+        ion_cached = meta.get("ion_name")
+        if ion_cached and ion_cached.lower() != ion_name.lower():
+            logging.warning(
+                "RDF cache %s was generated for ion '%s' but current ion is '%s'. Ignoring cache.",
+                rdf_cache_path, ion_cached, ion_name
+            )
+            rdf_cache_arrays = None
+            Y_GLOBAL_MAX = None
+        else:
+            cached_data = payload.get("data", {})
+            rdf_cache_arrays = {
+                micro: {
+                    label: (
+                        np.asarray(entry["r"], dtype=float),
+                        np.asarray(entry["g"], dtype=float),
+                    )
+                    for label, entry in micro_dict.items()
+                }
+                for micro, micro_dict in cached_data.items()
             }
-            for micro, micro_dict in cached_data.items()
-        }
-        msg = f"Loaded RDF cache from {rdf_cache_path} (global y-limit = {Y_GLOBAL_MAX:.2f})."
-        logging.info(msg)
-        print(msg)
-        determine_global_y = False  # cache already contains the scan results
+            msg = f"Loaded RDF cache from {rdf_cache_path} (global y-limit = {Y_GLOBAL_MAX:.2f})."
+            logging.info(msg)
+            print(msg)
+            determine_global_y = False  # cache already contains the scan results
 
     if determine_global_y and rdf_y_max is None:
         # -----------------------------------------------------------------------
@@ -325,7 +353,10 @@ def main(
             setup_logging(logfile)
 
             u = mda.Universe(top, traj, topology_format="TPR")
-            na_ag = u.select_atoms("name NA")
+            na_ag = u.select_atoms(f"name {ion_name}")
+            if len(na_ag) == 0:
+                logging.warning("No %s atoms in %s – skipped.", ion_label, microstate.name)
+                continue
 
             micro_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
             for label in PHOS_LABELS:
@@ -355,6 +386,7 @@ def main(
                         "r_max": r_max_nm,
                         "nbins": nbins,
                         "global_y": Y_GLOBAL_MAX,
+                        "ion_name": ion_name,
                     },
                     "data": {
                         micro: {
@@ -420,6 +452,8 @@ def main(
             plot_projection = plot_projection,
             precomputed_rdf = rdf_override,
             produce_boxplot = boxplot,
+            ion_name = ion_name,
+            ion_label = ion_label,
         )
 
 if __name__ == "__main__":
@@ -465,6 +499,11 @@ if __name__ == "__main__":
         action="store_false",
         help="Skip the per-microstate coordination boxplot.",
     )
+    parser.add_argument(
+        "--ion-name",
+        default="NA",
+        help="Atom name of the cation to analyze (e.g. NA, K).",
+    )
     args = parser.parse_args()
 
     main(
@@ -475,4 +514,5 @@ if __name__ == "__main__":
         plot_projection=args.plot_projection,
         rdf_data_path=args.rdf_data,
         boxplot=args.boxplot,
+        ion_name=args.ion_name,
     )

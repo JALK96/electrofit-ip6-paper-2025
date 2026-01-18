@@ -124,6 +124,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rdf_data_path=args.rdf_data,
         rep=getattr(args, 'rep', None),
         boxplot=getattr(args, 'boxplot', True),
+        ion_name=getattr(args, 'ion_name', 'NA'),
     )
 
 
@@ -305,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_coord = sub.add_parser(
         "coordination",
         help=(
-            "Analyze Na–IP6 coordination across microstates (counts, RDFs, optional projections)."
+            "Analyze ion–IP6 coordination across microstates (counts, RDFs, optional projections)."
         ),
     )
     p_coord.add_argument(
@@ -349,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rdf-data",
         default=None,
         help="Path to an RDF cache file (JSON). Reuse or refresh cached RDF curves.",
+    )
+    p_coord.add_argument(
+        "--ion-name",
+        default="NA",
+        help="Atom name of the cation to analyze (e.g. NA, K).",
     )
     p_coord.add_argument(
         "--no-boxplot",

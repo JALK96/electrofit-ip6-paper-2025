@@ -10,6 +10,7 @@ from MDAnalysis.analysis.rdf import InterRDF
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
+import re
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from typing import Optional
@@ -40,6 +41,8 @@ def plot_counts_subplots(
         timestep_ps: float,
         out_png   : pathlib.Path,
         title     : str,
+        *,
+        ion_label: str = "Na⁺",
 ) -> None:
     """Re-implementation of your 2×3 layout but plotting counts."""
     sns.set_context("talk")
@@ -56,10 +59,10 @@ def plot_counts_subplots(
         ax.axhline(mean_y, ls="--", lw=1.4, color="red")
         ax.text(0.95, 0.9, f"⟨count⟩ = {mean_y:.1f}",
                 ha="right", va="top", transform=ax.transAxes, color="red", fontsize=11)
-        ax.set_title(f"{label} – Na⁺")
+        ax.set_title(f"{label} – {ion_label}")
 
         if idx % 3 == 0:
-            ax.set_ylabel("No. bound Na⁺")
+            ax.set_ylabel(f"No. bound {ion_label}")
         if idx >= 3:
             ax.set_xlabel("Time / ns")
 
@@ -77,6 +80,7 @@ def plot_coordination_boxplot(
         showfliers: bool = True,
         binary_code: Optional[str] = None,
         ylabel: str = "Na⁺ count",
+        ion_label: str = "Na⁺",
 ) -> None:
     """
     Boxplot of Na⁺ coordination counts per phosphate for one microstate.
@@ -90,9 +94,9 @@ def plot_coordination_boxplot(
     # infer binary code from output path if not provided explicitly
     if binary_code is None:
         try:
-            binary_code = out_png.parents[2].name
-            if binary_code.startswith("IP_"):
-                binary_code = binary_code[3:]
+            parent_name = out_png.parents[2].name  # e.g. IP_101101 or IP_101101_100
+            match = re.search(r"[01]{6}", parent_name)
+            binary_code = match.group(0) if match else "000000"
         except Exception:
             binary_code = "000000"
     if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
@@ -153,7 +157,7 @@ def plot_coordination_boxplot(
 
     ax.set_xticks(range(1, 7))
     ax.set_xticklabels(PHOS_LABELS_CORRECTED, fontsize=12)
-    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_ylabel(ylabel.replace("Na⁺", ion_label), fontsize=12)
     ax.set_ylim(ymin, ymax)
     ax.tick_params(axis="y", labelsize=12)
     ax.spines["top"].set_visible(False)
@@ -233,6 +237,8 @@ def plot_rdf_periphO_Na(
         hide_y_ticklabels: bool = False,
         show_shell_cutoff: bool = False,
         rdf_results_override: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None,
+        ion_name: str = "NA",
+        ion_label: Optional[str] = None,
 ) -> None:
     """Plot Na⁺–peripheral‑oxygen RDFs for **one** microstate.
 
@@ -268,6 +274,7 @@ def plot_rdf_periphO_Na(
 
     if y_max_global is None:
         raise ValueError("plot_rdf_periphO_Na requires *y_max_global* so all figures share the same scale.")
+    ion_label = ion_label or f"{ion_name.upper()}⁺"
 
     font_rc = {
         "font.family": "serif",
@@ -276,7 +283,8 @@ def plot_rdf_periphO_Na(
 
     with plt.rc_context(font_rc):
         # ---- compute RDFs ---------------------------------------------------
-        na_ag = u.select_atoms("name NA")
+        ion_sel = f"name {ion_name}"
+        na_ag = u.select_atoms(ion_sel)
         periph_dict = {
             label: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
             for label in PHOS_LABELS
@@ -305,9 +313,9 @@ def plot_rdf_periphO_Na(
 
         # ---- binary code → colours -----------------------------------------
         try:
-            binary_code = out_png.parents[2].name
-            if binary_code.startswith("IP_"):
-                binary_code = binary_code[3:]
+            parent_name = out_png.parents[2].name
+            match = re.search(r"[01]{6}", parent_name)
+            binary_code = match.group(0) if match else "000000"
         except Exception:
             binary_code = "000000"
         if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
@@ -359,9 +367,9 @@ def plot_rdf_periphO_Na(
             # coordination number ---------------------------------------------
             mask_cn = r <= RCUTOFF_NM
             vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
-            rho_Na  = len(na_ag) / vol_nm3
-            logging.info(f"Volume: {vol_nm3:.2f} nm³, Density of Na⁺: {rho_Na:.2f} nm⁻³")
-            coord_num = 4.0 * np.pi * rho_Na * np.trapezoid(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
+            rho_ion  = len(na_ag) / vol_nm3
+            logging.info(f"Volume: {vol_nm3:.2f} nm³, Density of {ion_label}: {rho_ion:.2f} nm⁻³")
+            coord_num = 4.0 * np.pi * rho_ion * np.trapezoid(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
             ax.text(0.03, 0.8, f"{coord_num:.2f}", transform=ax.transAxes,
                     ha="left", va="top", fontsize=20, color=col, alpha=0.7)
 
@@ -435,9 +443,11 @@ def plot_frame_network_plane(
         out_png: pathlib.Path,
         reference_triplet: Tuple[str, str, str] = ("P", "P2", "P3"),
         r_cut_nm: float = RCUTOFF_NM,
+        ion_name: str = "NA",
+        ion_label: Optional[str] = None,
 ) -> None:
     """
-    Draw a 2-D network diagram of Na⁺ ions and phosphate centres by
+    Draw a 2-D network diagram of ions and phosphate centres by
     projecting onto the plane defined by *any* three IP6 atoms.
 
     Parameters
@@ -452,9 +462,10 @@ def plot_frame_network_plane(
         Names of *three* distinct IP6 atoms whose plane you wish to view
         (e.g. ("P","O9","P4") or any others in the same residue).
     r_cut_nm : float
-        Only draw a dashed line when Na–peripheral‐O distance < r_cut_nm,
+        Only draw a dashed line when ion–peripheral‐O distance < r_cut_nm,
         or `None` to draw all links.
     """
+    ion_label = ion_label or f"{ion_name.upper()}⁺"
     # 1. frame
     n_frames = len(u.trajectory)
     if not (0 <= frame < n_frames):
@@ -462,9 +473,9 @@ def plot_frame_network_plane(
     u.trajectory[frame]
 
     # 2. selections
-    na_atoms = u.select_atoms("name NA")
+    na_atoms = u.select_atoms(f"name {ion_name}")
     if len(na_atoms) == 0:
-        logging.warning("No Na⁺ ions – snapshot skipped.")
+        logging.warning("No %s ions – snapshot skipped.", ion_label)
         return
 
     # phosphate centres for plotting
@@ -499,7 +510,7 @@ def plot_frame_network_plane(
     na_proj   = project(na_atoms.positions)
     phos_proj = project(np.array([phos_atoms[label].position for label in PHOS_LABELS]))
 
-    # compute Na–peripheral-O minimum distances for dashed links
+    # compute ion–peripheral-O minimum distances for dashed links
     periph_ag = {
         lab: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[lab]))
         for lab in PHOS_LABELS
@@ -563,6 +574,8 @@ def plot_frame_network_3d_fixed_view(
         anchors: Tuple[str, str, str] = ("P", "P2", "P4"),
         r_cut_nm: float = RCUTOFF_NM,
         look_along: int = +1,          # +1 → camera along  +n,  -1 → along –n
+        ion_name: str = "NA",
+        ion_label: Optional[str] = None,
 ) -> None:
     """
     Draw a 3-D snapshot in laboratory coordinates but orient the Matplotlib
@@ -575,20 +588,21 @@ def plot_frame_network_3d_fixed_view(
     frame      : int          Frame index (0 ≤ frame < n_frames).
     out_png    : pathlib.Path Output image path.
     anchors    : (str,str,str)  Three phosphate labels fixing the plane.
-    r_cut_nm   : float | None   Show dashed link only if Na–P distance
+    r_cut_nm   : float | None   Show dashed link only if ion–P distance
                                 < r_cut_nm (None → show all).
     look_along : {+1,-1}        Choose whether the camera points parallel
                                 (+1) or antiparallel (-1) to the normal.
     """
+    ion_label = ion_label or f"{ion_name.upper()}⁺"
     # ── 1. go to requested frame ─────────────────────────────────
     if not (0 <= frame < len(u.trajectory)):
         raise IndexError(f"Frame {frame} out of range.")
     u.trajectory[frame]
 
     # ── 2. selections ────────────────────────────────────────────
-    na_atoms = u.select_atoms("name NA")
+    na_atoms = u.select_atoms(f"name {ion_name}")
     if len(na_atoms) == 0:
-        logging.warning("No Na⁺ ions — skipping 3-D plot.")
+        logging.warning("No %s ions — skipping 3-D plot.", ion_label)
         return
 
     phos_atoms = {lab: u.select_atoms(f"resname I* and name {lab}").atoms[0]
