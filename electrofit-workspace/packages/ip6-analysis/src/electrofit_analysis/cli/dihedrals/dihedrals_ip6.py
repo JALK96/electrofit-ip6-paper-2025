@@ -90,8 +90,37 @@ def load_universe(run_dir: Path, stage: str) -> mda.Universe:
 # -----------------------
 # Domain: Dihedral setup
 # -----------------------
-def dihedral_groups_spec() -> List[Dict]:
-    """Return the list of dihedral groups as in the original script."""
+def resolve_peripheral_map(atom_names: set[str]) -> Dict[str, Tuple[str, str, str]]:
+    """
+    Choose peripheral atoms per phosphate depending on molecule type.
+      * IP6 numbering (O6..O23) → default map.
+      * IT6 sulfated variant (S/S1..S5, O6..O17) → sulfate map.
+    """
+    has_o18 = "O18" in atom_names
+    has_sulfate = "S" in atom_names and "S5" in atom_names
+    if has_o18:
+        return {
+            "P": ("O6", "O7", "O8"),
+            "P1": ("O9", "O10", "O11"),
+            "P2": ("O12", "O13", "O14"),
+            "P3": ("O15", "O16", "O17"),
+            "P4": ("O18", "O19", "O20"),
+            "P5": ("O21", "O22", "O23"),
+        }
+    if has_sulfate:
+        return {
+            "P": ("O6", "O7", "S"),
+            "P1": ("O8", "O9", "S1"),
+            "P2": ("O10", "O11", "S2"),
+            "P3": ("O12", "O13", "S3"),
+            "P4": ("O14", "O15", "S4"),
+            "P5": ("O16", "O17", "S5"),
+        }
+    raise ValueError("Could not resolve peripheral atoms: expected IP6 (O18..O23) or sulfate atoms (S..S5).")
+
+
+def dihedral_groups_spec(periph_map: Dict[str, Tuple[str, str, str]]) -> List[Dict]:
+    """Return the list of dihedral groups (ring + per phosphate)."""
     return [
         {
             "name": "Ring Dihedrals",
@@ -106,27 +135,27 @@ def dihedral_groups_spec() -> List[Dict]:
         },
         {
             "name": "Dihedrals for C1",
-            "dihedrals": [("C", "O", "P", "O6"), ("C", "O", "P", "O7"), ("C", "O", "P", "O8")],
+            "dihedrals": [("C", "O", "P", periph_map["P"][0]), ("C", "O", "P", periph_map["P"][1]), ("C", "O", "P", periph_map["P"][2])],
         },
         {
             "name": "Dihedrals for C2",
-            "dihedrals": [("C1", "O1", "P1", "O9"), ("C1", "O1", "P1", "O10"), ("C1", "O1", "P1", "O11")],
+            "dihedrals": [("C1", "O1", "P1", periph_map["P1"][0]), ("C1", "O1", "P1", periph_map["P1"][1]), ("C1", "O1", "P1", periph_map["P1"][2])],
         },
         {
             "name": "Dihedrals for C3",
-            "dihedrals": [("C2", "O2", "P2", "O12"), ("C2", "O2", "P2", "O13"), ("C2", "O2", "P2", "O14")],
+            "dihedrals": [("C2", "O2", "P2", periph_map["P2"][0]), ("C2", "O2", "P2", periph_map["P2"][1]), ("C2", "O2", "P2", periph_map["P2"][2])],
         },
         {
             "name": "Dihedrals for C4",
-            "dihedrals": [("C3", "O3", "P3", "O15"), ("C3", "O3", "P3", "O16"), ("C3", "O3", "P3", "O17")],
+            "dihedrals": [("C3", "O3", "P3", periph_map["P3"][0]), ("C3", "O3", "P3", periph_map["P3"][1]), ("C3", "O3", "P3", periph_map["P3"][2])],
         },
         {
             "name": "Dihedrals for C5",
-            "dihedrals": [("C4", "O4", "P4", "O18"), ("C4", "O4", "P4", "O19"), ("C4", "O4", "P4", "O20")],
+            "dihedrals": [("C4", "O4", "P4", periph_map["P4"][0]), ("C4", "O4", "P4", periph_map["P4"][1]), ("C4", "O4", "P4", periph_map["P4"][2])],
         },
         {
             "name": "Dihedrals for C6",
-            "dihedrals": [("C5", "O5", "P5", "O21"), ("C5", "O5", "P5", "O22"), ("C5", "O5", "P5", "O23")],
+            "dihedrals": [("C5", "O5", "P5", periph_map["P5"][0]), ("C5", "O5", "P5", periph_map["P5"][1]), ("C5", "O5", "P5", periph_map["P5"][2])],
         },
     ]
 
@@ -217,7 +246,9 @@ def process_one_molecule(logger: logging.Logger, project_path: Path, species_id:
     stage = "remd" if "run_remd_gmx_simulation" in str(run_dir) else "final"
     u = load_universe(run_dir, stage)
 
-    groups = dihedral_groups_spec()
+    atom_names = set(u.select_atoms("resname IT* or resname I*").names)
+    periph_map = resolve_peripheral_map(atom_names)
+    groups = dihedral_groups_spec(periph_map)
     dihedral_definitions, dihedral_group_indices, _group_names = flatten_groups(groups)
     dih_indices = build_dihedral_indices(u, dihedral_definitions)
 

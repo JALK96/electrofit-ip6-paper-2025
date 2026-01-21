@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
 import pathlib
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Literal
 
 import numpy as np
 import MDAnalysis as mda
@@ -105,28 +105,9 @@ def plot_coordination_boxplot(
 
     per_phos = [np.asarray(counts_ts[i], dtype=float) for i in range(len(PHOS_LABELS))]
 
-    # determine y-limits from whiskers (like summarize_nap)
-    whisk_lows, whisk_highs = [], []
-    for arr in per_phos:
-        if arr.size == 0:
-            continue
-        q1, q3 = np.percentile(arr, (25, 75))
-        iqr = q3 - q1
-        arr_f = arr.astype(float, copy=False)
-        lw_cand = arr_f[arr_f >= q1 - 1.5 * iqr]
-        hw_cand = arr_f[arr_f <= q3 + 1.5 * iqr]
-        if lw_cand.size:
-            whisk_lows.append(lw_cand.min())
-        if hw_cand.size:
-            whisk_highs.append(hw_cand.max())
-
-    if whisk_lows and whisk_highs:
-        ymin, ymax = float(min(whisk_lows)), float(max(whisk_highs))
-        pad = 0.05 * (ymax - ymin if ymax > ymin else 1.0)
-        ymin -= pad
-        ymax += pad
-    else:
-        ymin, ymax = 0.0, 1.0
+    metrics = coordination_boxplot_metrics(counts_ts)
+    ymin = metrics["ymin"]
+    ymax = metrics["ymax"]
 
     fig, ax = plt.subplots(figsize=(5.5, 3.8))
     bp = ax.boxplot(
@@ -170,17 +151,100 @@ def plot_coordination_boxplot(
     logging.info("Coordination boxplot written to %s", out_png)
 
 
+def coordination_boxplot_metrics(counts_ts: np.ndarray) -> Dict[str, object]:
+    """Compute the same per-phosphate boxplot stats used for plotting.
+
+    Returns a dict with:
+      - per_phosphate: {label: {mean,std,median,q1,q3,iqr,whisker_low,whisker_high,n_outliers}}
+      - ymin/ymax: global y-limits based on whiskers (with padding)
+    """
+    if counts_ts.ndim != 2 or counts_ts.shape[0] != len(PHOS_LABELS):
+        raise ValueError("counts_ts must have shape (6, n_frames)")
+
+    per_phosphate: Dict[str, Dict[str, float | int]] = {}
+    whisk_lows: list[float] = []
+    whisk_highs: list[float] = []
+
+    for idx, label in enumerate(PHOS_LABELS):
+        arr = np.asarray(counts_ts[idx], dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            per_phosphate[label] = {
+                "mean": float("nan"),
+                "std": float("nan"),
+                "median": float("nan"),
+                "q1": float("nan"),
+                "q3": float("nan"),
+                "iqr": float("nan"),
+                "whisker_low": float("nan"),
+                "whisker_high": float("nan"),
+                "n_outliers": 0,
+            }
+            continue
+
+        q1, median, q3 = np.percentile(arr, (25, 50, 75))
+        iqr = q3 - q1
+        low_bound = q1 - 1.5 * iqr
+        high_bound = q3 + 1.5 * iqr
+
+        lw_cand = arr[arr >= low_bound]
+        hw_cand = arr[arr <= high_bound]
+        whisk_low = float(lw_cand.min()) if lw_cand.size else float(arr.min())
+        whisk_high = float(hw_cand.max()) if hw_cand.size else float(arr.max())
+        n_outliers = int(np.count_nonzero((arr < low_bound) | (arr > high_bound)))
+
+        whisk_lows.append(whisk_low)
+        whisk_highs.append(whisk_high)
+
+        per_phosphate[label] = {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0,
+            "median": float(median),
+            "q1": float(q1),
+            "q3": float(q3),
+            "iqr": float(iqr),
+            "whisker_low": float(whisk_low),
+            "whisker_high": float(whisk_high),
+            "n_outliers": n_outliers,
+        }
+
+    if whisk_lows and whisk_highs:
+        ymin, ymax = float(min(whisk_lows)), float(max(whisk_highs))
+        pad = 0.05 * (ymax - ymin if ymax > ymin else 1.0)
+        ymin -= pad
+        ymax += pad
+    else:
+        ymin, ymax = 0.0, 1.0
+
+    return {"per_phosphate": per_phosphate, "ymin": ymin, "ymax": ymax}
+
+
 # ┃                 RDF  of Na⁺ vs. peripheral O                  ┃
 # ╚═══════════════════════════════════════════════════════════════╝
 
-# Utility: first‑shell boundary from an RDF curve 
-def first_shell_end(r: np.ndarray, g: np.ndarray) -> float:
+# Utility: first‑shell boundary from an RDF curve
+def first_shell_end(
+    r: np.ndarray,
+    g: np.ndarray,
+    *,
+    r_limit_nm: float = 0.8,
+    peak_window_nm: Tuple[float, float] = (0.12, 0.45),
+    min_window_nm: Tuple[float, float] = (0.18, 0.65),
+) -> float:
     """
     Return the radius r (nm) at which the first coordination shell ends,
     i.e. the first *local* minimum of g(r) that follows the first *local*
-    maximum (peak).  The algorithm is deliberately conservative: if no
-    clear peak‑minimum pair can be detected within 0 < r < 0.8 nm it
-    returns NaN so that the calling code can ignore the value.
+    maximum (peak).
+
+    This is a heuristic detector intended for noisy RDF curves. In rare
+    cases (especially with sparse sampling) the RDF may show small
+    oscillations at very short distances that can be mistaken for the first
+    peak. To avoid returning unphysical cutoffs near r≈0, the peak search is
+    restricted to a physically plausible window (default 0.12–0.45 nm) and
+    the minimum is restricted to a plausible post-peak window (default
+    0.18–0.65 nm, capped by ``r_limit_nm``). If no clear peak→minimum pair
+    can be detected, NaN is returned so the caller can fall back to a fixed
+    cutoff.
 
     Notes
     -----
@@ -188,43 +252,79 @@ def first_shell_end(r: np.ndarray, g: np.ndarray) -> float:
       peak   : g[i-1] < g[i] >= g[i+1]
       minimum: g[i-1] > g[i] <= g[i+1]
 
-    The search is limited to r ≤ 0.8 nm, which safely brackets the
-    Na–O first‑shell region observed in all micro‑states.
+    The default windows bracket the Na–O first-shell peak and its following
+    minimum in all micro-states we observed.
     """
     if r.ndim != 1 or g.ndim != 1:
         raise ValueError("r and g must be one‑dimensional arrays")
     if len(r) != len(g):
         raise ValueError("r and g must have the same length")
 
-    N = len(r)
-    rlim = 0.8
-    # Only consider indices where 0 < r[i] <= 0.8 and 1 <= i < N-1
-    valid = [i for i in range(1, N-1) if (r[i] > 0) and (r[i] <= rlim)]
-
-    # Find the first local maximum (peak)
-    peak_idx = None
-    for i in valid:
-        if g[i] > g[i-1] and g[i] >= g[i+1]:
-            peak_idx = i
-            break
-    if peak_idx is None:
+    r = np.asarray(r, dtype=float)
+    g = np.asarray(g, dtype=float)
+    if r.size < 3:
+        return np.nan
+    if not np.all(np.isfinite(r)) or not np.any(np.isfinite(g)):
         return np.nan
 
-    # Find the first local minimum after the peak
-    min_idx = None
-    for j in range(peak_idx + 1, N-1):
-        if r[j] > rlim:
-            break
-        if g[j] < g[j-1] and g[j] <= g[j+1]:
+    # Ensure r is monotonically increasing (InterRDF bins are, but keep defensive)
+    if np.any(np.diff(r) <= 0):
+        order = np.argsort(r)
+        r = r[order]
+        g = g[order]
+
+    peak_lo, peak_hi = peak_window_nm
+    peak_mask = (r >= peak_lo) & (r <= min(peak_hi, r_limit_nm))
+    peak_candidates = np.where(peak_mask)[0]
+    if peak_candidates.size == 0:
+        return np.nan
+
+    # Use the strongest peak in the physically plausible window.
+    peak_idx = int(peak_candidates[np.nanargmax(g[peak_candidates])])
+    if not np.isfinite(g[peak_idx]) or g[peak_idx] <= 0:
+        return np.nan
+
+    # Now find the first local minimum after the selected peak.
+    N = len(r)
+    min_lo, min_hi = min_window_nm
+    min_hi = min(min_hi, r_limit_nm)
+
+    # Minimum search interval: after the peak, within the min window.
+    start = peak_idx + 1
+    # find first index where r >= min_lo, but keep it after peak
+    if r[start] < min_lo:
+        start = int(np.searchsorted(r, min_lo, side="left"))
+        start = max(start, peak_idx + 1)
+    end = int(np.searchsorted(r, min_hi, side="right")) - 1
+    end = min(end, N - 2)
+    if start >= end:
+        return np.nan
+
+    min_idx: int | None = None
+    for j in range(start, end + 1):
+        if g[j] < g[j - 1] and g[j] <= g[j + 1]:
             min_idx = j
             break
+
+    # Fallback: if there is no clear local minimum, pick the global minimum
+    # in the interval (still gives a sensible cutoff for smooth curves).
     if min_idx is None:
+        segment = g[start : end + 1]
+        if not np.any(np.isfinite(segment)):
+            return np.nan
+        min_idx = int(start + np.nanargmin(segment))
+
+    shell_end = float(r[min_idx])
+    # Sanity checks: must be after the peak and within the configured windows.
+    if not (np.isfinite(shell_end) and (shell_end > float(r[peak_idx]))):
+        return np.nan
+    if shell_end < min_lo or shell_end > min_hi:
+        return np.nan
+    # Require a drop after the peak (avoid returning a flat/noisy plateau).
+    if np.isfinite(g[min_idx]) and g[min_idx] >= 0.95 * g[peak_idx]:
         return np.nan
 
-    # Sanity: ensure minimum is after peak and not at the very end
-    if min_idx <= peak_idx or min_idx >= N-1:
-        return np.nan
-    return float(r[min_idx])
+    return shell_end
 
 def plot_rdf_periphO_Na(
         u: mda.Universe,
@@ -236,6 +336,8 @@ def plot_rdf_periphO_Na(
         hide_y_label: bool = False,
         hide_y_ticklabels: bool = False,
         show_shell_cutoff: bool = False,
+        cutoff_mode: Literal["fixed", "first-shell"] = "fixed",
+        r_cut_nm: float = RCUTOFF_NM,
         rdf_results_override: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None,
         ion_name: str = "NA",
         ion_label: Optional[str] = None,
@@ -265,6 +367,15 @@ def plot_rdf_periphO_Na(
         When `True`, suppress y tick labels (tick marks remain visible).
     show_shell_cutoff : bool, optional
         Toggle drawing the green first-shell cutoff guide.
+    cutoff_mode : {"fixed", "first-shell"}, optional
+        Controls both the vertical cutoff guide and the integration limit used
+        to compute the coordination number displayed in each subplot.
+        - ``fixed`` uses ``r_cut_nm``.
+        - ``first-shell`` uses the first minimum of g(r) after the first peak
+          (per phosphate); falls back to ``r_cut_nm`` if no minimum is detected.
+    r_cut_nm : float, optional
+        Fixed cutoff radius in nm (used when ``cutoff_mode="fixed"`` and as a
+        fallback when the first-shell end cannot be detected).
     rdf_results_override : dict | None, optional
         Precomputed RDF arrays in the form ``{label: (r_nm, g_raw)}``. When
         provided, the expensive InterRDF computation is skipped and these
@@ -326,25 +437,72 @@ def plot_rdf_periphO_Na(
         X_LOWER, X_UPPER = RCUTOFF_NM, 1.2     # nm
 
         # ---- loop over P1–P6 ------------------------------------------------
+        shell_ends_nm: list[float] = []
         for ax, (label, col) in zip(axes, zip(PHOS_LABELS, colours)):
             r, g_raw = rdf_results[label]
             g_per_phos = g_raw * 3                    # 3 O atoms → per phosphate
 
             # --- determine first‑shell boundary -----------------------------
             shell_end = first_shell_end(r, g_per_phos)
-            if show_shell_cutoff and not np.isnan(shell_end):
-                # visual guide: green dotted line at first minimum
+            have_shell_end = not np.isnan(shell_end)
+            if have_shell_end:
+                shell_ends_nm.append(float(shell_end))
+
+            cutoff_nm = r_cut_nm
+            if cutoff_mode == "first-shell":
+                if have_shell_end:
+                    # extra guard against pathological detections
+                    if shell_end < 0.15:
+                        logging.info(
+                            "First-shell cutoff for %s was %.3f nm (too small); falling back to fixed cutoff %.3f nm",
+                            label,
+                            shell_end,
+                            r_cut_nm,
+                        )
+                    else:
+                        cutoff_nm = shell_end
+                else:
+                    logging.info(
+                        "No first-shell minimum detected for %s; falling back to fixed cutoff %.3f nm",
+                        label,
+                        r_cut_nm,
+                    )
+
+            # draw guides ------------------------------------------------------
+            if cutoff_mode == "first-shell" and have_shell_end:
+                # integration cutoff at the first-shell end
+                ax.axvline(shell_end, color="green", ls=":", lw=1.2)
+                ax.text(
+                    shell_end,
+                    0.95 * y_max_global,
+                    f"{shell_end:.2f} nm",
+                    rotation=90,
+                    va="top",
+                    ha="right",
+                    color="green",
+                    fontsize=8,
+                )
+                logging.info("First-shell end for %s: %.3f nm", label, shell_end)
+            elif show_shell_cutoff and have_shell_end:
+                # visual guide only (fixed integration cutoff)
                 ax.axvline(shell_end, color="green", ls=":", lw=1.0)
-                ax.text(shell_end, 0.95 * y_max_global,
-                        f"{shell_end:.2f} nm",
-                        rotation=90, va="top", ha="right",
-                        color="green", fontsize=8)
-                logging.info("First‑shell end for %s: %.3f nm", label, shell_end)
+                ax.text(
+                    shell_end,
+                    0.95 * y_max_global,
+                    f"{shell_end:.2f} nm",
+                    rotation=90,
+                    va="top",
+                    ha="right",
+                    color="green",
+                    fontsize=8,
+                )
+                logging.info("First-shell end for %s: %.3f nm", label, shell_end)
 
             if col == "blue":
                 ax.fill_between(r, g_per_phos, 0.0, color=col, alpha=0.3)
             ax.plot(r, g_per_phos, lw=1.2, color="black")
-            ax.axvline(RCUTOFF_NM, ymax=0.8, color="black", ls="--", lw=1.0)
+            if cutoff_mode == "fixed" or not have_shell_end:
+                ax.axvline(r_cut_nm, ymax=0.8, color="black", ls="--", lw=1.0)
 
             # global y‑scale --------------------------------------------------
             ax.set_ylim(0.0, y_max_global)
@@ -365,7 +523,7 @@ def plot_rdf_periphO_Na(
             ax.spines['right'].set_visible(False)
 
             # coordination number ---------------------------------------------
-            mask_cn = r <= RCUTOFF_NM
+            mask_cn = r <= cutoff_nm
             vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
             rho_ion  = len(na_ag) / vol_nm3
             logging.info(f"Volume: {vol_nm3:.2f} nm³, Density of {ion_label}: {rho_ion:.2f} nm⁻³")
@@ -432,6 +590,15 @@ def plot_rdf_periphO_Na(
         fig.savefig(out_png, dpi=300)
         plt.close(fig)
         logging.info("RDF figure written to %s", out_png)
+        if shell_ends_nm:
+            mean_nm = float(np.mean(shell_ends_nm))
+            std_nm = float(np.std(shell_ends_nm, ddof=1)) if len(shell_ends_nm) > 1 else 0.0
+            logging.info(
+                "First-shell end summary (n=%d): mean=%.3f nm, std=%.3f nm",
+                len(shell_ends_nm),
+                mean_nm,
+                std_nm,
+            )
 
 
 # ┃    2-D PROJECTION  PERPENDICULAR  TO  A  REFERENCE PLANE      ┃

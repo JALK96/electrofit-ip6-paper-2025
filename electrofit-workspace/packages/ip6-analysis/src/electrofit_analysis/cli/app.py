@@ -125,6 +125,11 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rep=getattr(args, 'rep', None),
         boxplot=getattr(args, 'boxplot', True),
         ion_name=getattr(args, 'ion_name', 'NA'),
+        rdf_show_first_shell=getattr(args, 'rdf_show_first_shell', False),
+        rdf_cutoff_mode=getattr(args, 'rdf_cutoff_mode', 'fixed'),
+        project_mode=getattr(args, 'project_mode', 'auto'),
+        coord_cutoff_nm=getattr(args, 'coord_cutoff_nm', None),
+        coord_cutoff_nm_global=getattr(args, 'coord_cutoff_nm_global', False),
     )
 
 
@@ -350,6 +355,45 @@ def build_parser() -> argparse.ArgumentParser:
         "--rdf-data",
         default=None,
         help="Path to an RDF cache file (JSON). Reuse or refresh cached RDF curves.",
+    )
+    p_coord.add_argument(
+        "--rdf-show-first-shell",
+        action="store_true",
+        help="Draw a dotted line at the RDF first-shell end (first minimum after first peak).",
+    )
+    p_coord.add_argument(
+        "--rdf-cutoff-mode",
+        choices=["fixed", "first-shell"],
+        default="fixed",
+        help="RDF cutoff/integration mode: fixed (uses r_cut_nm) or first-shell (uses RDF minimum).",
+    )
+    p_coord.add_argument(
+        "--project-mode",
+        choices=["auto", "project", "collection"],
+        default="auto",
+        help=(
+            "How to interpret --project.\n"
+            "- auto: treat as a project if it contains a 'process/' dir, otherwise as a collection of projects.\n"
+            "- project: a single project (expects <project>/process/...).\n"
+            "- collection: a directory containing multiple projects (each child has its own process/).\n"
+        ),
+    )
+    p_coord.add_argument(
+        "--coord-cutoff-nm",
+        type=float,
+        default=None,
+        help=(
+            "Fixed cutoff in nm for the explicit coordination/count algorithm. "
+            "If omitted, the cutoff is estimated from the RDF first-shell end (per microstate by default)."
+        ),
+    )
+    p_coord.add_argument(
+        "--coord-cutoff-nm-global",
+        action="store_true",
+        help=(
+            "Use one global RDF-derived cutoff (mean first-shell end) across the scan scope "
+            "(project or collection). Recommended when comparing concentrations within one ion type."
+        ),
     )
     p_coord.add_argument(
         "--ion-name",
