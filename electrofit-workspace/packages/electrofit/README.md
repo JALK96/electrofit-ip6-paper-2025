@@ -1,289 +1,156 @@
 # electrofit (core)
 
-Minimal core tooling to process small molecules / residues, run short MD (GROMACS) and extract conformers for charge workflows.
+Minimal tooling to parameterise small molecules/residues, run short GROMACS MD, extract conformers, and drive RESP charge aggregation.
 
-## Quick Start
+## What lives in this package
+- `cli/`: the `electrofit` command dispatcher (step0–step8, REMD variants) and helper CLIs for symmetry / charge editing and plotting.
+- `config/`: loading + layering of `electrofit.toml`, derived ion/box settings, snapshot helpers.
+- `pipeline/`: step orchestration (prep, MD, conformer extraction, RESP, aggregation, final MD, REMD).
+- `domain/`: pure logic (sampling, symmetry constraints, charge processing, final/remd sim manifests).
+- `adapters/`: thin wrappers over external tools (GROMACS, Gaussian, RESP) and result helpers.
+- `io/`: MOL2/RESP/equiv group readers & writers, topology utilities.
+- `infra/`: logging, scratch management, decisions/snapshots.
+- `plotting/` and `viz/`: optional plotting utilities for charge histograms and helper glyphs.
 
-Create / activate an environment, install the package (editable example):
-
+## Installation (editable example)
 ```bash
 pip install -e ./packages/electrofit
 ```
 
-Prepare a project folder (contains `electrofit.toml`, `data/input/<MOLNAME>/<files>`):
+## CLI workflow (high level)
+Every command requires `--project <project_root>` and accepts an optional `--config <path>` override. Molecule name is inferred from context (`process/<mol>` or `data/input/<mol>`) when possible.
 
+| Command      | Purpose (inputs ➜ outputs) |
+|--------------|----------------------------|
+| `step0`      | Scaffold `process/` tree for each molecule under `data/input/`; idempotent copy/normalise. |
+| `step1`      | Initial prep (Gaussian/RESP staging, symmetry JSON, ACPYPE-ready files). Outputs `process/<mol>/run_gau_create_gmx_in/`. |
+| `step2`      | Build `run_gmx_simulation` directories: stage MDPs from `[paths].mdp_dir`, create run manifest, copy topology/start structures. |
+| `step3`      | EM → NVT → NPT → short production MD. Respects `[gmx.runtime]` threads/pin/gpu. Produces `md.gro`, `md_center.xtc`. |
+| `step4`      | Sample conformers from production trajectory into `extracted_conforms/` using `linear|random|maxmin` frame selection. |
+| `step5`      | Per-conformer Gaussian/RESP pipeline (parallelisable), writes RESP charges per conformer. |
+| `step6`      | Aggregate charges (mean, optional symmetry/group averaging, optional outlier removal), update MOL2/ACPYPE. |
+| `step7`      | Final GROMACS setup using aggregated charges (`run_final_gmx_simulation/`). |
+| `step8`      | Final MD production with aggregated charges. |
+| `step7remd`  | REMD setup (templates, replica folders, `remd*.tpr`). |
+| `step8remd`  | REMD equilibration + prep, writes `run_remd.sh`; can launch via generated script. |
+
+### Minimal workflow example
 ```bash
+# 1) scaffold and prep
 electrofit step0 --project /path/to/project
+electrofit step1 --project /path/to/project
+
+# 2) build and run short MD, then sample conformers
+electrofit step2 --project /path/to/project
+electrofit step3 --project /path/to/project
+electrofit step4 --project /path/to/project --sampling-method maxmin --sample 25 --seed 123
+
+# 3) RESP ensemble + aggregation
+electrofit step5 --project /path/to/project --workers 8
+electrofit step6 --project /path/to/project --plot-histograms --remove-outlier
 ```
 
-Run successive workflow steps (see below). Each step reads the project root you pass with `--project` and optional config overrides via `--config`.
+## Configuration reference (`electrofit.toml`)
+Configuration is layered (lowest → highest precedence):
+1. `<project>/electrofit.toml`
+2. `<project>/data/input/<mol>/electrofit.toml`
+3. `<project>/process/<mol>/electrofit.toml`
+4. `<run_dir>/electrofit.toml` (if present)
+5. `--config <path>`
 
-## Configuration (`electrofit.toml`)
+Fields are merged into nested dataclasses; unknown keys are ignored. Defaults shown in parentheses.
 
-Key sections (example):
+### [project]
+- `name` (None): free text project label.
+- `molecule_name` (None): overrides inferred molecule folder name.
+- `residue_name` (None): residue name used in topologies.
+- `charge` (None): total solute charge (integer).
+- `protocol` (None): charge protocol tag (`bcc`, `opt`, etc.).
+- `atom_type` (None): optional forcefield atom type hint.
+- `adjust_symmetry` (false), `ignore_symmetry` (false): legacy symmetry flags (overridden by `[symmetry]`).
+- `calculate_group_average` (false): enable symmetry-group averaging during aggregation.
 
-```toml
-[project]
-molecule_name = "IP_011101"
-residue_name  = "IP6"
-charge        = -8
-protocol      = "bcc"     # or "opt"
+### [symmetry]
+- `initial` (`antechamber`|`user`|`none`, default None → falls back to project flags): mode for the initial (step1) stage.
+- `ensemble` (`antechamber`|`user`|`none`, default None): mode for ensemble/aggregation stage. Modes map to `(adjust_symmetry, ignore_symmetry)` as follows: `antechamber` → (False, False); `user` → (True, False); `none` → (True, True).
 
-[paths]
-mdp_dir = "data/MDP"
-base_scratch_dir = "/scratch/${USER}/electrofit"
+### [paths]
+- `mdp_dir` (`"data/MDP"`): directory containing MDP templates relative to project root.
+- `base_scratch_dir` (None): root for scratch working dirs (env vars expanded).
 
-[gromacs.runtime]
-threads = 8
-pin = true
+### [gmx.runtime]
+- `threads` (16): OpenMP threads per `gmx_mpi` rank.
+- `pin` (true): CPU pinning flag passed to GROMACS.
+- `gpu` (false): whether to request GPU aware settings in templates (templates must support it).
 
-[sampling]
-method = "maxmin"   # linear | random | maxmin
-count = 25
-seed = 123
-```
+### [simulation.box]
+- `type` (`"dodecahedron"`): supports `dodecahedron` or `cubic` for automatic sizing.
+- `edge_nm` (1.2): padding distance when computing box size around solute.
 
-CLI arguments override config values. (Früherer ENV-Fallback `ELECTROFIT_CONFIG_PATH` wurde entfernt – nur noch explizit via `--config`.)
+### [simulation.ions]
+- `cation` (`"NA"`), `anion` (`"CL"`).
+- `salt_concentration` (default 0.15 M if unset): bulk salt mode (legacy default when no targets are provided).
+- `enforce_neutrality` (true).
+- `targets`: enables target-count mode if any target has payload.
+  - `positive_ion.desired_count` (int, required in target mode)
+  - `positive_ion.concentration` (float, mol/L, required in target mode)
+  - `negative_ion.desired_count` (int, optional; inferred if neutrality enforced)
+  - `negative_ion.concentration` (not supported; leave unset)
+- Derived summary (ion counts, inferred neutrality, effective molarity, box lengths) is logged via `derive_simulation_settings`.
 
-## Workflow Steps (0–4)
+### [simulation]
+- `forcefield` (`"amber14sb.ff"`): folder name under `share/gromacs/top` or project-supplied.
 
-### step0 – Initial project scaffold
-Creates baseline directory structure (e.g. `process/`), validates inputs, copies / normalises initial structural files if required.
+### [remd]
+- `enabled` (false)
+- `nreplicas` (16)
+- `tmin` (300.0), `tmax` (420.0)
+- `spacing` (`"geometric"` or `"list"`)
+- `temperatures` (list, used when `spacing="list"`)
+- `replex` (100): exchange period (steps)
+- `mdp_template` (`"REMD.mdp"`)
+- `mpi_ranks` (None): overrides `nreplicas` when launching mpirun for REMD.
 
-Command:
-```
-electrofit step0 --project <project_root>
-```
+### [sampling] (used by step4 only)
+- `method` (`"linear"` | `"random"` | `"maxmin"`, default `linear`)
+- `count` (int, default 20)
+- `seed` (int | None): seed for random/maxmin; `None` → deterministic linear or library default.
 
-### step1 – Initial processing
-Legacy pre-processing (Gaussian / RESP input staging, symmetry handling). Produces intermediate files placed under `process/<mol>/run_gau_create_gmx_in`.
-
-### step2 – Simulation directory setup
-Builds per-molecule GROMACS run directories (`run_gmx_simulation`), inserts MDP templates, generates topology / coordinate starting point.
-
-### step3 – Start short MD production
-Runs energy minimisation + equilibration + (short) production with parameterised runtime flags (threads, pinning). Produces `md_center.xtc` and `md.gro` used later.
-
+## Sampling quick reference (step4)
 ```bash
-electrofit step3 --project <project_root>
+electrofit step4 --project <proj> \
+  --sampling-method maxmin \
+  --sample 30 \
+  --seed 42 \
+  --workers 4
+```
+Outputs PDBs under `process/<mol>/extracted_conforms/` and logs a sampling decision record (method, count, seed, symmetry notes).
+
+## Notes on configuration resolution
+- Unknown keys are ignored (safe to keep project-level extras).
+- CLI flags always win over TOML.
+- Snapshot composition for per-run folders follows: upstream → molecule input → process cfg → project defaults → explicit override; existing snapshots are re-seeded on each run (clean behaviour).
+
+## Minimal API surface (Python)
+```python
+from electrofit.config.loader import load_config, dump_config
+
+cfg = load_config(project_root="/path/to/project")
+dump_config(cfg)  # prints flattened keys and values
+
+from electrofit.simulation.ions import derive_simulation_settings
+derived = derive_simulation_settings(cfg.simulation.box, cfg.simulation.ions, cfg.project.charge or 0)
+print(derived.ions.positive_count, derived.ions.negative_count)
 ```
 
-### step4 – Extract representative conformers
-Reads each `process/<mol>/run_gmx_simulation` trajectory and writes sampled conformers into `process/<mol>/extracted_conforms/` (PDB + copied ancillary input files).
+The public entrypoint `python -m electrofit` is equivalent to running the `electrofit` console script.
 
-```bash
-electrofit step4 --project <project_root> \
-	--sample 20 --sampling-method maxmin --seed 123 --workers 2
-```
+## Logging and scratch
+- Default logging is INFO-level stdout unless a handler is already configured by the caller.
+- Scratch directories are managed by `infra.scratch_manager` under `[paths].base_scratch_dir` (env-expanded); operations are idempotent.
 
-## Conformer Sampling (Step 4)
+## Safety and compatibility
+- Legacy `.ef` configs are no longer read; use TOML only.
+- Deprecated key shim: `simulation.ions.concentration` is auto-mapped to `simulation.ions.salt_concentration` with a warning.
+- Symmetry defaults fall back to project-level booleans when `[symmetry]` is omitted.
 
-Supported strategies (`--sampling-method`):
-
-* `linear` (default): evenly spaced frames (deterministic)
-* `random`: uniform random without replacement (seeded)
-* `maxmin`: farthest-point (max–min) diversity in RMSD space
-
-Important options:
-
-* `--sample N` desired number of conformers (fallback 20 or `[sampling].count`)
-* `--sampling-method METHOD` selection strategy
-* `--seed S` seed for random / starting frame in maxmin
-* `--workers K` parallelise across molecule directories (0 = auto heuristic)
-* `--no-progress` disable the progress bar
-
-Config section (optional):
-
-```toml
-[sampling]
-method = "maxmin"
-count = 25
-seed = 123
-```
-
-CLI overrides config. Output line includes method, e.g. `Extracted 25 conformers (method=maxmin) ...`.
-
-Performance notes:
-
-* `maxmin` costs roughly O(k * N) RMSD evaluations (k = selected frames). For very large trajectories try a smaller `--sample` first.
-* Parallelisation is at the granularity of molecules, not frames inside one trajectory.
-
-Planned extensions: RMSD cutoff incremental selection, k-medoids clustering, PCA/grid stratified sampling.
-
-## Parallel Execution
-
-`--workers` uses a process pool. If unset / 0 an automatic value (CPU count minus one) capped by number of molecules is used. Sequential mode (workers=1) retains a live progress bar.
-
-## Logging & Scratch
-
-Scratch directories are created under `base_scratch_dir` (environment variables expanded). Finalisation is idempotent. GROMACS step automates interactive selections (e.g. `trjconv`).
-
-## Architecture Overview & Ongoing Refactor
-
-Layered Struktur (in Arbeit):
-
-```
-electrofit/
-	domain/              # Fachlogik (prep, charges, symmetry, sampling)
-	adapters/            # Technische Tool-Anbindungen (gromacs, gaussian, resp)
-	infra/               # Infrastruktur (scratch, config snapshot, logging)
-	workflows/           # Thin CLI-Orchestrierung (step*-Skripte)
-	io/                  # Dateiformat Operationen (mol2, resp, files)
-	viz/                 # Plotting / Visualisierung (optional)
-```
-
-Zentrale Prinzipien:
-* Domain-Funktionen kapseln Logik ohne direkte Shell-Kommandos.
-* Adapters kapseln externe Tools (GROMACS bereits migriert; Gaussian/RESP folgen).
-* Einheitliche Deprecation-Shims für alte `core.*` Entry Points (einmalige Warnung).
-
-### Gemeinsame RESP Symmetry Utility
-
-Vorher doppelte Logik in Prep & Charges: Jetzt zentralisiert in `domain.symmetry.resp_constraints.apply_and_optionally_modify`.
-Vorteile: Single Source of Truth für JSON Equivalence Groups Anwendung; konsistente Logging & Fehlerbehandlung.
-
-### Geplanter Adapter-Ausbau
-
-Neu (Skeletons):
-* `adapters/gaussian.py` – Bau & Ausführung von Gaussian Inputs + Cache-Hydration API.
-* `adapters/resp.py` – Zwei-Phasen RESP Pipeline (ac/respgen + symmetry + charge update).
-
-Aktuelle Domain-Pfade rufen noch `cli.run_commands` Funktionen direkt; schrittweise Migration wird diese durch Adapter-Funktionen ersetzen, wodurch Testbarkeit (Mocking / Timing) verbessert und zukünftige Engines (z.B. Psi4) pluggable werden.
-
-Migrationsstrategie (Kurz):
-1. Skeletons hinzufügen (done).
-2. Domain `process_conformer` & `process_initial` intern umstellen auf Adapter-Aufrufe (keine Public API Änderung).
-3. Entfernen direkter `run_command`-Abhängigkeiten aus Domain (nur Adapters dürfen shellen).
-4. Optional: strukturierte Rückgabeobjekte (Timing, Pfade, Checksums) für reproducibility / Caching.
-
-Siehe `docs/REFACTOR_PLAN.md` für detaillierten Status & weitere Phasen.
-
-## Diagnostic Histograms & Outlier Filtering (Step 6)
-
-Optional diagnostic visuals and IQR-based outlier removal for charge ensembles.
-
-Enable via flags (independent / combinable):
-
-```
-electrofit step6 --project <proj> \
-	--plot-histograms \
-	--remove-outlier \
-	--hist-combine-groups \
-	--hist-bins 30 \
-	--outlier-iqr-factor 1.5
-```
-
-Artifacts (within `process/<mol>/results/`):
-
-| File | Description |
-|------|-------------|
-| hist.pdf | Per-atom distributions before filtering |
-| hist_no_outlier.pdf | Overlay before vs after outlier removal |
-| hist_adjusted.pdf | After applying group/symmetry average (or cleaned reweighted) |
-| hist_groups.pdf | Group-combined distributions (symmetry groups merged) |
-| hist_summary.json | Structured report (removed counts, per_atom_outliers, indices, IQR factor) |
-| hist_manifest.json | Machine-readable status for each optional histogram (expected/created/reason) |
-| cleaned_adjusted_charges.json | Filtered charges per atom |
-| cleaned_adjusted_group_average_charges* | Group-averaged filtered charges |
-
-Outlier criterion (per atom column): value < Q1 - f*IQR or > Q3 + f*IQR (factor f = `--outlier-iqr-factor`, default 1.5). A conformer is discarded if any atom is an outlier (union mask) – conservative pruning to remove multi-atom anomalies.
-
-Sequence (if all enabled):
-1. hist.pdf (raw)
-2. hist_no_outlier.pdf (after removal)
-3. hist_adjusted.pdf (after group averaging / reweight)
-4. hist_groups.pdf (aggregated symmetry groups)
-
-Design rationale:
-* Zero-impact unless flags are passed.
-* JSON summary supports automated regression thresholds.
-* Separation of diagnostics from core pipeline ensures reproducibility.
-
-Planned extensions: z-score alternative, adaptive IQR, persistent whitelist of conformers.
-
-### Histogram Manifest (`hist_manifest.json`)
-
-Because some histogram artefacts are *conditional* (e.g. `hist_adjusted.pdf` only makes sense once group averaging or adjusted means are applied), the pipeline writes a manifest capturing — per logical histogram stage — whether it was expected and whether it was actually created.
-
-Schema (per key):
-
-```jsonc
-{
-	"initial": { "expected": true,  "created": true,  "path": "hist.pdf",              "reason": null },
-	"after_outlier": { "expected": true,  "created": true,  "path": "hist_no_outlier.pdf", "reason": null },
-	"adjusted": { "expected": true,  "created": false, "path": null, "reason": "no groups" },
-	"group_combined": { "expected": false, "created": false, "path": null, "reason": "hist_combine_groups flag not set" }
-}
-```
-
-Interpretation rules:
-* `expected=false` means the user did not request (via flags) or preconditions were deliberately not met (e.g. symmetry disabled) — missing artefact is **not** an error.
-* `expected=true` & `created=true` implies a file at `path` exists.
-* `expected=true` & `created=false` signals a soft failure or structural reason; `reason` provides diagnostics (e.g. `no non-empty series`, `error: <msg>`, `no groups`). Tests may choose to fail in CI if such cases become frequent.
-* Stable contract: new histogram types may be appended (additive change) — consumers should ignore unknown keys for forward compatibility.
-
-Rationale: Avoid brittle test expectations for artefacts that depend on small synthetic datasets or rare branches while still surfacing why something was skipped. This pattern is preferable to writing placeholder PDFs that convey no information.
-
-Testing Guidance:
-* Unit tests assert required base artefacts (`hist.pdf`, `hist_no_outlier.pdf`) exist when requested.
-* Conditional artefacts (`hist_adjusted.pdf`, `hist_groups.pdf`) are validated through the manifest (`expected -> created`).
-* When adding new histogram stages, update the manifest keys and extend tests only if the new stage should always be produced under current flags.
-
-Backward Compatibility: Legacy scripts looking only for `hist.pdf` keep working; the manifest is an additive enhancement.
-
-## Testing
-
-Unit tests include sampling selection determinism and basic functional checks. Shortened MDP templates keep test runtime low.
-
-## License
-
-## Konfig-Präzedenz & Fill-In
-
-Die endgültige `electrofit.toml` Snapshot-Datei in jedem Arbeitsverzeichnis entsteht über einen klar definierten Layering-Prozess:
-
-Starke Overrides (überschreiben vorhandene Werte in Reihenfolge – spätere gewinnt):
-1. Molekül-spezifische Eingabe: `data/input/<MOL>/electrofit.toml`
-2. Prozess-spezifische Datei: `process/<MOL>/electrofit.toml` bzw. vorherige Schritt-Ausgabe (z.B. `run_gau_create_gmx_in/electrofit.toml` oder `results/electrofit.toml` je nach Schritt)
-3. CLI `--config` (falls angegeben)
-
-Fill-In Ebene (füllt nur fehlende Schlüssel, überschreibt niemals):
-4. Projektweite Defaults: `<project_root>/electrofit.toml`
-
-Semantik:
-* „Override“ ersetzt bestehende Werte (deep merge, scalars & Subtrees vollständig überschrieben).
-* „Fill-In“ ergänzt nur Keys, die noch nicht existieren (rekursiv), lässt vorhandene Werte unverändert.
-* Dieses Muster verhindert, dass projektweite Defaults unabsichtlich molekül-spezifische Einstellungen verdrängen, reduziert aber Duplikation bei globalen Parametern.
-
-Beispiel – gewünschte Kraftfeld-Priorität:
-* Molekül: `simulation.forcefield = "amber14sb.ff"`
-* Projekt setzt keinen Forcefield-Schlüssel → Snapshot übernimmt Molekülwert.
-* Falls Projekt später `simulation.forcefield` hätte, würde er NICHT das molekül-spezifische überschreiben (weil Projekt nur Fill-In ist) – gewünschtes Verhalten.
-
-Logging-Markierungen:
-* `[config][override] key: old -> new` für Überschreibungen durch starke Layer.
-* `[config][fill] key: value` wenn ein fehlender Schlüssel durch Projekt-Defaults ergänzt wurde.
-* `[config] no overrides applied ...` / `no fills` wenn keine Änderung.
-
-CLI `--config`:
-* Wird als stärkste Override-Ebene eingehängt (nach Molekül & Prozess), um gezielt Werte temporär zu ersetzen.
-* Überschreibt vorhandene Werte, führt keine Fill-Ins durch.
-
-Implementierung:
-* Zentral in `compose_snapshot` (`infra/config_snapshot.py`, legacy Alias `workflows/snapshot.py`).
-* Alle relevanten Schritte (1,2,3,4,6,7) benutzen diese Funktion, um doppelte Logik zu vermeiden.
-
-Vorteile:
-* Vorhersehbare Priorität ohne nachträgliche „Hack“-Korrekturen.
-* Minimierte Redundanz in per-molekül TOMLs (nur spezifisches definieren, globales bleibt im Projektfile).
-* Klare Trennung zwischen „Ändern“ (Override) und „Auffüllen“ (Fill-In).
-
-Best Practices:
-* Molekül-spezifische Parameter (Ladung, Forcefield, besondere Sampling-Optionen) in der Molekül-Datei definieren.
-* Einheitliche globale Pfade / Laufzeit-Defaults nur im Projektroot pflegen.
-* `--config` für experimentelle Runs oder CI-spezifische Tuning verwenden (nicht dauerhaft einchecken).
-
-Edge Cases:
-* Fehlt ein Molekül-TOML komplett, greifen Prozess/CLI/Projekt in genannter Reihenfolge.
-* Mehrere Moleküle: bestimmte restriktive Keys werden geloggt, wenn sie in Multi-Mol Kontext überschrieben würden (siehe `RESTRICTED_DEFAULT`).
-
-TBD (add your license information here).
