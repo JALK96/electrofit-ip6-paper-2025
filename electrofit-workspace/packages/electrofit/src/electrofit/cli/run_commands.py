@@ -339,9 +339,41 @@ def run_espgen(gesp_file, esp_file, scratch_dir):
     - esp_file (str): Output .esp file.
     - scratch_dir (str): Directory where the command is executed.
     """
-    command = f"espgen -i {gesp_file} -o {esp_file}"
-    run_command(command, cwd=scratch_dir)
-    logging.info("espgen processing completed.")
+    import time
+    from pathlib import Path
+
+    def _validate_esp(path: Path) -> None:
+        # Basic sanity check: values should be O(1..10) in atomic units.
+        # If espgen glitches, we observed values ~1e16 which later blow up RESP.
+        txt = path.read_text()
+        if "*" in txt:
+            raise ValueError("contains '*' (non-numeric overflow marker)")
+        lines = txt.splitlines()[:200]
+        vals: list[float] = []
+        for line in lines[1:]:  # skip header ints
+            for tok in line.split():
+                vals.append(float(tok))
+        if not vals:
+            raise ValueError("no numeric values found")
+        max_abs = max(abs(v) for v in vals)
+        if max_abs > 1e5:
+            raise ValueError(f"max |value|={max_abs:.3e} looks corrupted")
+
+    esp_path = Path(scratch_dir) / str(esp_file)
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        command = f"espgen -i {gesp_file} -o {esp_file}"
+        run_command(command, cwd=scratch_dir)
+        try:
+            _validate_esp(esp_path)
+            logging.info("espgen processing completed (attempt %d).", attempt)
+            return
+        except Exception as e:
+            last_err = e
+            logging.warning("espgen produced an invalid .esp on attempt %d (%s).", attempt, e)
+            if attempt == 1:
+                time.sleep(0.2)
+    raise RuntimeError(f"espgen produced an invalid ESP file after retry: {esp_path} ({last_err})")
 
 
 def run_acpype(mol2_file, net_charge, scratch_dir, atom_type="gaff2", charges="bcc"):
