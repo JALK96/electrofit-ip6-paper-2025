@@ -45,6 +45,7 @@ class InitialPrepConfig:
     atom_type: str = "gaff2"
     adjust_sym: bool = False
     ignore_sym: bool = False
+    symmetry_initial_mode: str | None = None
     protocol: str = "bcc"  # or 'opt'
 
 
@@ -212,6 +213,8 @@ def process_initial(cfg: InitialPrepConfig, scratch_dir: str, original_dir: str,
     # Decision logging (before branching)
     try:
         dec = build_initial_decision(cfg.protocol, cfg.adjust_sym, cfg.ignore_sym)
+        if cfg.symmetry_initial_mode is not None:
+            dec.extra.append(("symmetry.mode.initial", cfg.symmetry_initial_mode))
         dec.log('step1')
     except Exception:  # pragma: no cover
         logging.debug('[step1][decisions] logging failed', exc_info=True)

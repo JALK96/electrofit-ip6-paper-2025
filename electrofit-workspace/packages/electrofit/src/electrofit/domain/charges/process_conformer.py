@@ -33,6 +33,7 @@ class ConformerConfig:
     residue_name: str
     adjust_sym: bool = False
     ignore_sym: bool = False
+    symmetry_ensemble_mode: str | None = None
     protocol: str = "bcc"  # or 'opt'
 
 
@@ -172,11 +173,15 @@ def process_conformer(cfg: ConformerConfig, scratch_dir: str, original_dir: str,
                 "protocol",
                 "adjust_sym",
                 "ignore_sym",
+                "symmetry_ensemble_mode",
                 "residue_name",
             ],
         )
         try:
-            build_conformer_decision(cfg.protocol, cfg.adjust_sym, cfg.ignore_sym).log('step5')
+            dec = build_conformer_decision(cfg.protocol, cfg.adjust_sym, cfg.ignore_sym)
+            if cfg.symmetry_ensemble_mode is not None:
+                dec.extra.append(("symmetry.mode.ensemble", cfg.symmetry_ensemble_mode))
+            dec.log('step5')
         except Exception:
             logging.debug('[step5][decisions] logging failed', exc_info=True)
     except Exception:

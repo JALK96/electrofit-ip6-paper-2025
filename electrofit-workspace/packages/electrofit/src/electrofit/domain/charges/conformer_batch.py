@@ -246,6 +246,7 @@ def process_conformer_dir(
                 residue_name=proj.residue_name or "LIG",
                 adjust_sym=adjust_sym,
                 ignore_sym=ignore_sym,
+                symmetry_ensemble_mode=getattr(getattr(cfg, "symmetry", None), "ensemble", None),
                 protocol=protocol,
             )
             try:

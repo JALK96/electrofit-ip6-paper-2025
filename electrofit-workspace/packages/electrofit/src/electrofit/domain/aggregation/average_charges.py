@@ -175,7 +175,19 @@ def process_molecule_average_charges(
 
     try:
         symmetry_json_found = (extracted / 'equiv_groups.json').is_file() or any((mol_dir / 'run_gau_create_gmx_in').glob('*.json'))
-        log_relevant_config('step6', proj, ['molecule_name','protocol','adjust_symmetry','ignore_symmetry','calculate_group_average'])
+        log_relevant_config(
+            'step6',
+            cfg,
+            [
+                'project.molecule_name',
+                'project.protocol',
+                'symmetry.initial',
+                'symmetry.ensemble',
+                'project.adjust_symmetry',
+                'project.ignore_symmetry',
+                'project.calculate_group_average',
+            ],
+        )
     except Exception:  # pragma: no cover
         logging.debug('[step6][decisions] logging failed', exc_info=True)
 
@@ -484,14 +496,17 @@ def process_molecule_average_charges(
             _mark("adjusted", False, True, None, f"error: {e}")
 
     try:
-        build_aggregation_decision(
+        dec = build_aggregation_decision(
             protocol=protocol,
             adjust_sym=adjust_sym,
             ignore_sym=ignore_sym,
             calc_group_average=calc_group_average,
             group_average_applied=group_average_applied,
             symmetry_json_found=symmetry_json_found,
-        ).log('step6')
+        )
+        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
+        dec.extra.append(("symmetry.mode.ensemble", str(sym_ensemble) if sym_ensemble is not None else "<unset>"))
+        dec.log('step6')
     except Exception:  # pragma: no cover
         logging.debug('[step6][decisions] aggregation logging failed', exc_info=True)
 

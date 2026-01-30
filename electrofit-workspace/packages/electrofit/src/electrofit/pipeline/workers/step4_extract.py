@@ -71,7 +71,7 @@ def _extract_for_molecule(
 
     try:
         symmetry_json_present = any(pis_dir.glob('*.json'))
-        build_sampling_decision(
+        dec = build_sampling_decision(
             protocol=protocol,
             adjust_sym=adjust_sym,
             ignore_sym=ignore_sym,
@@ -79,11 +79,27 @@ def _extract_for_molecule(
             sample_count=sample,
             seed=seed,
             symmetry_json_present=symmetry_json_present,
-        ).log('step4')
+        )
+        # Log user-facing symmetry modes (preferred) in decisions for clarity.
+        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
+        dec.extra.append(("symmetry.mode.ensemble", str(sym_ensemble) if sym_ensemble is not None else "<unset>"))
+        dec.log("step4")
         # Update project section for logging parity
         proj.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
         proj.ignore_symmetry = ignore_sym  # type: ignore[attr-defined]
-        log_relevant_config('step4', proj, ['molecule_name','residue_name','protocol','adjust_symmetry','ignore_symmetry'])
+        log_relevant_config(
+            'step4',
+            cfg,
+            [
+                'project.molecule_name',
+                'project.residue_name',
+                'project.protocol',
+                'symmetry.initial',
+                'symmetry.ensemble',
+                'project.adjust_symmetry',
+                'project.ignore_symmetry',
+            ],
+        )
     except Exception:
         logging.debug('[step4][decisions] logging failed', exc_info=True)
 

@@ -21,6 +21,7 @@ from electrofit.config.loader import load_config, dump_config, resolve_symmetry_
 from electrofit.io.files import find_file_with_extension
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, log_run_header, reset_logging, enable_header_dedup
+from electrofit.infra.step_logging import log_relevant_config
 from electrofit.pipeline.molecule_filter import molecule_component
 
 __all__ = ["main"]
@@ -96,6 +97,22 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
         adjust_initial, ignore_initial = resolve_symmetry_flags(cfg, "initial")
         cfg.project.adjust_symmetry = adjust_initial
         cfg.project.ignore_symmetry = ignore_initial
+        try:
+            log_relevant_config(
+                "step1",
+                cfg,
+                [
+                    "project.molecule_name",
+                    "project.residue_name",
+                    "project.protocol",
+                    "symmetry.initial",
+                    "symmetry.ensemble",
+                    "project.adjust_symmetry",
+                    "project.ignore_symmetry",
+                ],
+            )
+        except Exception:  # pragma: no cover
+            logging.debug("[step1][cfg] selective config logging failed", exc_info=True)
         additional_input: list[str] = []
         if adjust_initial:
             try:
@@ -113,6 +130,7 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
         input_files = [os.path.basename(mol2_file)] + list(additional_input)
         scratch_dir, original_dir = setup_scratch_directory(input_files, base_scratch_dir)
     # Ensure mol2 is present inside scratch root (scratch manager copies)
+        symmetry_initial_mode = getattr(getattr(cfg, "symmetry", None), "initial", None)
         cfg_obj = InitialPrepConfig(
             molecule_name=molecule_name,
             mol2_file=os.path.basename(mol2_file),
@@ -121,6 +139,7 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
             atom_type=atom_type,
             adjust_sym=adjust_initial,
             ignore_sym=ignore_initial,
+            symmetry_initial_mode=symmetry_initial_mode,
             protocol=protocol,
         )
         # Use same ensure_finalized context to keep identical side effects

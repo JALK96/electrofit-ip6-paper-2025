@@ -187,7 +187,7 @@ def build_sampling_decision(
             notes.append('symmetry requested+ignored (will suppress modifications in later steps)')
         else:
             notes.append('symmetry planned for RESP stages')
-        if not symmetry_json_present and protocol in {'bcc','opt'}:
+        if (not ignore_sym) and (not symmetry_json_present) and protocol in {'bcc','opt'}:
             warnings.append('symmetry groups JSON missing at sampling time')
     # charges not yet aggregated or RESP ensemble run
     return DecisionModel(
@@ -196,7 +196,7 @@ def build_sampling_decision(
         charges_origin='pending',
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
-        symmetry_effective='applied (antechamber defined)',
+        symmetry_effective='not applied (sampling stage)',
         ensemble_mode=False,
         notes=notes,
         warnings=warnings,
