@@ -212,10 +212,12 @@ def process_initial(cfg: InitialPrepConfig, scratch_dir: str, original_dir: str,
         logging.warning("[prep] Residue renaming roundtrip (scratch only) skipped after error: %s", e)
     # Decision logging (before branching)
     try:
-        dec = build_initial_decision(cfg.protocol, cfg.adjust_sym, cfg.ignore_sym)
-        if cfg.symmetry_initial_mode is not None:
-            dec.extra.append(("symmetry.mode.initial", cfg.symmetry_initial_mode))
-        dec.log('step1')
+        build_initial_decision(
+            cfg.protocol,
+            cfg.adjust_sym,
+            cfg.ignore_sym,
+            symmetry_mode=cfg.symmetry_initial_mode,
+        ).log('step1')
     except Exception:  # pragma: no cover
         logging.debug('[step1][decisions] logging failed', exc_info=True)
     if cfg.protocol == "opt":

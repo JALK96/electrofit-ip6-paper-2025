@@ -68,6 +68,7 @@ def _run_one_dir(run_dir: str, project_root: str, override_cfg: str | None, mult
         mol,
         multi_molecule=multi_mol,
         log_fn=logging.info,
+        step="step1",
         process_cfg=process_defaults,
         molecule_input=molecule_input,
         project_defaults=project_defaults,

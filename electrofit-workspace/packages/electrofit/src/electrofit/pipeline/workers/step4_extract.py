@@ -71,6 +71,7 @@ def _extract_for_molecule(
 
     try:
         symmetry_json_present = any(pis_dir.glob('*.json'))
+        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
         dec = build_sampling_decision(
             protocol=protocol,
             adjust_sym=adjust_sym,
@@ -79,10 +80,8 @@ def _extract_for_molecule(
             sample_count=sample,
             seed=seed,
             symmetry_json_present=symmetry_json_present,
+            symmetry_mode=sym_ensemble,
         )
-        # Log user-facing symmetry modes (preferred) in decisions for clarity.
-        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
-        dec.extra.append(("symmetry.mode.ensemble", str(sym_ensemble) if sym_ensemble is not None else "<unset>"))
         dec.log("step4")
         # Update project section for logging parity
         proj.adjust_symmetry = adjust_sym  # type: ignore[attr-defined]
@@ -114,6 +113,7 @@ def _extract_for_molecule(
         mol_proc_dir.name,
         multi_molecule=multi_mol,
         log_fn=logging.info,
+        step="step4",
         upstream=sim_dir / "electrofit.toml",
         process_cfg=mol_proc_dir / "electrofit.toml",
         molecule_input=project_root / "data" / "input" / mol_proc_dir.name / "electrofit.toml",

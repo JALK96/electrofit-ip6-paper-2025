@@ -18,6 +18,8 @@ class DecisionModel:
     symmetry_ignore_flag: bool
     symmetry_effective: str  # 'applied (antechamber defined)' | 'applied (user defined)' | 'none'
     ensemble_mode: bool
+    symmetry_config: str | None = None  # 'initial' | 'ensemble' | 'legacy' | None
+    symmetry_mode: str | None = None  # 'antechamber' | 'user' | 'none' | None
     notes: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     # Optional extra key/values (sampling/aggregation metadata) stored as flat list of tuples to keep model stable
@@ -29,8 +31,10 @@ class DecisionModel:
             ("stage", self.stage),
             ("protocol", str(self.protocol)),
             ("charges_origin", self.charges_origin),
-            ("symmetry.adjustment.requested", str(self.symmetry_requested)),
-            ("symmetry.ignore_flag", str(self.symmetry_ignore_flag)),
+            ("symmetry.config", str(self.symmetry_config)),
+            ("symmetry.mode", str(self.symmetry_mode)),
+            ("symmetry.adjust_symmetry", str(self.symmetry_requested)),
+            ("symmetry.ignore_symmetry", str(self.symmetry_ignore_flag)),
             ("symmetry.effective", self.symmetry_effective),
             ("ensemble_mode", str(self.ensemble_mode)),
             ("notes", '[' + ','.join(self.notes) + ']'),
@@ -52,8 +56,10 @@ class DecisionModel:
                     ('ensemble_mode', self.ensemble_mode),
                 ]
                 sym_section = [
-                    ('symmetry.adjustment.requested', self.symmetry_requested),
-                    ('symmetry.ignore_flag', self.symmetry_ignore_flag),
+                    ('symmetry.config', self.symmetry_config),
+                    ('symmetry.mode', self.symmetry_mode),
+                    ('symmetry.adjust_symmetry', self.symmetry_requested),
+                    ('symmetry.ignore_symmetry', self.symmetry_ignore_flag),
                     ('symmetry.effective', self.symmetry_effective),
                 ]
                 extra_section = list(self.extra) if self.extra else []
@@ -91,7 +97,7 @@ class DecisionModel:
             logging.warning(f"[{step}][warn] {w}")
 
 
-def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: bool) -> DecisionModel:
+def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: bool, *, symmetry_mode: str | None = None) -> DecisionModel:
     notes: list[str] = []
     warnings: list[str] = []
     if protocol == 'bcc':
@@ -123,6 +129,8 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
         stage='initial',
         protocol=protocol,
         charges_origin=charges_origin,
+        symmetry_config='initial',
+        symmetry_mode=symmetry_mode,
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
         symmetry_effective=symmetry_effective,
@@ -132,7 +140,7 @@ def build_initial_decision(protocol: str | None, adjust_sym: bool, ignore_sym: b
     )
 
 
-def build_conformer_decision(protocol: str | None, adjust_sym: bool, ignore_sym: bool) -> DecisionModel:
+def build_conformer_decision(protocol: str | None, adjust_sym: bool, ignore_sym: bool, *, symmetry_mode: str | None = None) -> DecisionModel:
     notes: list[str] = []
     warnings: list[str] = []
     # Ensemble RESP always single-point; protocol only influences notes.
@@ -155,6 +163,8 @@ def build_conformer_decision(protocol: str | None, adjust_sym: bool, ignore_sym:
         stage='conformer',
         protocol=protocol,
         charges_origin=charges_origin,
+        symmetry_config='ensemble',
+        symmetry_mode=symmetry_mode,
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
         symmetry_effective=symmetry_effective,
@@ -173,6 +183,7 @@ def build_sampling_decision(
     sample_count: int,
     seed: Optional[int],
     symmetry_json_present: bool,
+    symmetry_mode: str | None = None,
 ) -> DecisionModel:
     """Decision for Step4 sampling (no charges yet: pending state).
 
@@ -182,18 +193,30 @@ def build_sampling_decision(
     if seed is not None:
         notes.append(f"sampling.seed={seed}")
     warnings: List[str] = []
-    if adjust_sym:
-        if ignore_sym:
-            notes.append('symmetry requested+ignored (will suppress modifications in later steps)')
-        else:
-            notes.append('symmetry planned for RESP stages')
-        if (not ignore_sym) and (not symmetry_json_present) and protocol in {'bcc','opt'}:
-            warnings.append('symmetry groups JSON missing at sampling time')
+    mode = (symmetry_mode or "").strip().lower() or None
+    if mode == "none":
+        notes.append("symmetry disabled by config (symmetry.ensemble=none)")
+    elif mode == "user":
+        notes.append("symmetry planned for RESP stages (user-defined groups)")
+        if (not symmetry_json_present) and protocol in {"bcc", "opt"}:
+            warnings.append("symmetry groups JSON missing at sampling time")
+    elif mode == "antechamber":
+        notes.append("symmetry groups from antechamber defaults (no user JSON)")
+    else:
+        # Legacy / unset mode: fall back to derived flags for messaging.
+        if adjust_sym and ignore_sym:
+            notes.append("symmetry disabled (adjust_symmetry=True, ignore_symmetry=True)")
+        elif adjust_sym:
+            notes.append("symmetry planned for RESP stages")
+            if (not symmetry_json_present) and protocol in {"bcc", "opt"}:
+                warnings.append("symmetry groups JSON missing at sampling time")
     # charges not yet aggregated or RESP ensemble run
     return DecisionModel(
         stage='sampling',
         protocol=protocol,
         charges_origin='pending',
+        symmetry_config='ensemble',
+        symmetry_mode=mode or symmetry_mode,
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
         symmetry_effective='not applied (sampling stage)',
@@ -212,6 +235,7 @@ def build_aggregation_decision(
     calc_group_average: bool,
     group_average_applied: bool,
     symmetry_json_found: bool,
+    symmetry_mode: str | None = None,
 ) -> DecisionModel:
     """Decision for Step6 aggregation of RESP ensemble charges.
 
@@ -252,6 +276,8 @@ def build_aggregation_decision(
         stage='aggregation',
         protocol=protocol,
         charges_origin=charges_origin,
+        symmetry_config='ensemble',
+        symmetry_mode=(symmetry_mode or "").strip().lower() or symmetry_mode,
         symmetry_requested=adjust_sym,
         symmetry_ignore_flag=ignore_sym,
         symmetry_effective=symmetry_effective,

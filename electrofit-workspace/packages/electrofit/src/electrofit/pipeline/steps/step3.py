@@ -15,6 +15,7 @@ from electrofit.adapters.gromacs import set_up_production
 from electrofit.io.ff import validate_forcefield, ensure_forcefield_installed
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, reset_logging, log_run_header, enable_header_dedup
+from electrofit.infra.step_logging import log_relevant_config
 from electrofit.pipeline.molecule_filter import filter_paths_for_molecule
 
 __all__ = ["main"]
@@ -77,6 +78,7 @@ def main():  # pragma: no cover
             mol,
             multi_molecule=multi_mol,
             log_fn=logging.info,
+            step="step3",
             upstream=upstream,
             process_cfg=process_cfg,
             molecule_input=molecule_input,
@@ -88,6 +90,26 @@ def main():  # pragma: no cover
             dump_config(cfg_run, log_fn=logging.debug)
         except Exception:
             logging.debug("[step3] dump per-run config failed", exc_info=True)
+        try:
+            log_relevant_config(
+                "step3",
+                cfg_run,
+                [
+                    "project.molecule_name",
+                    "simulation.forcefield",
+                    "gmx.runtime.threads",
+                    "gmx.runtime.pin",
+                    "gmx.runtime.gpu",
+                    "paths.base_scratch_dir",
+                    "simulation.box.type",
+                    "simulation.box.edge_nm",
+                    "simulation.ions.cation",
+                    "simulation.ions.anion",
+                    "simulation.ions.salt_concentration",
+                ],
+            )
+        except Exception:  # pragma: no cover
+            logging.debug("[step3][cfg] selective config logging failed", exc_info=True)
 
         # Pull simulation knobs from run config (fallback to defaults if absent)
         sim = getattr(cfg_run, "simulation", None)

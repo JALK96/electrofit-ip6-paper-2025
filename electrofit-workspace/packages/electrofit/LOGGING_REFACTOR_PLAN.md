@@ -280,6 +280,9 @@ This is the suggested sequence to implement the redesign without breaking the pi
    - (sources can be collected in `compose_snapshot` and returned as metadata)
 2) Agree on curated `cfg` field lists per step (small tables).
 
+Status note: a first version of config provenance is now implemented directly in `compose_snapshot` as a single-line
+`[stepX][snapshot] layers: ...` overview plus a `seeded ... from <layer>` line (keeping existing per-key override logs).
+
 ### Phase B: symmetry + DecisionModel correctness
 3) Extend `DecisionModel` to include symmetry mode strings (initial/ensemble) and applied/planned flags.
 4) Fix `build_sampling_decision` to never claim symmetry is “applied”.

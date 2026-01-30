@@ -23,24 +23,38 @@ CONFIG_ARG_HELP = (
 
 # Internal helper
 
-def _seed_snapshot(target_dir: Path, sources: Iterable[Path]) -> Path | None:
+def _seed_snapshot(target_dir: Path, sources: Iterable[tuple[str, Path]]) -> tuple[Path | None, str | None, Path | None]:
     """(Re)create snapshot from first existing source.
+
+    Returns (snapshot_path, seed_kind, seed_path).
 
     Overwrites existing snapshot unconditionally (clean behaviour) except when
     *no* source exists; then keeps existing snapshot if present, else returns None.
     """
     snap = target_dir / "electrofit.toml"
-    for cand in sources:
+    for kind, cand in sources:
         if cand and cand.is_file():
             try:
                 snap.write_text(cand.read_text())
             except Exception as e:  # log minimal diagnostic via print (no logger guaranteed here)
                 print(f"[snapshot][warn] failed to seed from {cand}: {e}")
-            break
-    else:  # no source found
-        if not snap.exists():
-            return None
-    return snap
+            return snap, kind, cand
+    # no source found
+    if not snap.exists():
+        return None, None, None
+    return snap, "existing", snap
+
+
+def _snapshot_prefix(step: str | None) -> str:
+    return f"[{step}][snapshot]" if step else "[snapshot]"
+
+
+def _format_layer_path(path: Path, project_root: Path) -> str:
+    """Prefer project-relative paths for readability; fall back to absolute."""
+    try:
+        return str(path.resolve().relative_to(project_root.resolve()))
+    except Exception:
+        return str(path.resolve())
 
 
 def compose_snapshot(
@@ -49,6 +63,7 @@ def compose_snapshot(
     molecule: str | None,
     multi_molecule: bool,
     log_fn: Callable[[str], None],
+    step: str | None = None,
     upstream: Path | None = None,
     process_cfg: Path | None = None,
     molecule_input: Path | None = None,
@@ -67,18 +82,44 @@ def compose_snapshot(
     Fill phase (adds only missing keys):
         project_defaults
     """
-    sources: list[Path] = []
+    sources: list[tuple[str, Path]] = []
     if upstream:
-        sources.append(upstream)
+        sources.append(("upstream", upstream))
     if molecule_input:
-        sources.append(molecule_input)
+        sources.append(("molecule_input", molecule_input))
     if process_cfg:
-        sources.append(process_cfg)
+        sources.append(("process_cfg", process_cfg))
     if project_defaults:
-        sources.append(project_defaults)
-    snap = _seed_snapshot(run_dir, sources)
+        sources.append(("project_defaults", project_defaults))
+    snap, seed_kind, seed_path = _seed_snapshot(run_dir, sources)
     if not snap or not snap.is_file():
         return None
+    prefix = _snapshot_prefix(step)
+    try:
+        # Compact one-line layer overview: helps users understand which files influenced this run_dir snapshot.
+        layers: list[tuple[str, Path | None]] = [
+            ("upstream", upstream),
+            ("molecule_input", molecule_input),
+            ("process_cfg", process_cfg),
+            ("project_defaults", project_defaults),
+            ("extra_override", extra_override),
+        ]
+        parts: list[str] = []
+        for name, layer_path in layers:
+            if layer_path is None:
+                parts.append(f"{name}=<none>")
+                continue
+            disp = _format_layer_path(layer_path, project_root)
+            parts.append(f"{name}={disp}" + ("" if layer_path.is_file() else " (missing)"))
+        log_fn(f"{prefix} layers: " + "; ".join(parts))
+
+        if seed_kind == "existing":
+            log_fn(f"{prefix} reusing existing electrofit.toml (no seed sources found)")
+        elif seed_kind and seed_path:
+            log_fn(f"{prefix} seeded electrofit.toml from {seed_kind}: {seed_path}")
+    except Exception:
+        # Snapshot logging must never break pipeline
+        pass
     # Strong overrides
     for layer in [molecule_input, process_cfg, extra_override]:
         if layer and layer.is_file():

@@ -11,6 +11,8 @@ import fnmatch
 import json
 import logging
 import os
+import math
+import statistics
 from typing import Tuple, Dict
 
 from electrofit.io.mol2_ops import update_mol2_charges, parse_charges_from_mol2
@@ -142,6 +144,7 @@ def process_molecule_average_charges(
         mol_dir.name,
         multi_molecule=multi_mol,
         log_fn=logging.info,
+        step="step6",
         upstream=extracted / "electrofit.toml",
         process_cfg=mol_dir / "electrofit.toml",
         molecule_input=project_root / "data" / "input" / mol_dir.name / "electrofit.toml",
@@ -192,6 +195,97 @@ def process_molecule_average_charges(
         logging.debug('[step6][decisions] logging failed', exc_info=True)
 
     initial_charges_dict = adjust_atom_names(parse_charges_from_mol2(mol2_source_file_path))
+
+    # ── Step6 input audit: count conformers + sanity-check per-conformer RESP outputs ─────────
+    # This helps detect missing/failed conformers (no *_resp.mol2) and pathological outputs
+    # (e.g., all-zero or non-finite charges) early and transparently.
+    try:
+        target_net = float(charge)
+        conf_dirs = sorted([p for p in extracted.iterdir() if p.is_dir()])
+        missing_resp: list[str] = []
+        suspicious_resp: list[str] = []
+        resp_nets: list[float] = []
+        resp_atom_counts: list[int] = []
+        large_net_deviation: list[str] = []
+        parse_fail: list[str] = []
+
+        for conf_dir in conf_dirs:
+            resp_files = sorted(conf_dir.glob("*_resp.mol2"))
+            if not resp_files:
+                missing_resp.append(conf_dir.name)
+                continue
+            resp_path = resp_files[0]
+            try:
+                atoms = parse_charges_from_mol2(str(resp_path))
+                charges = []
+                for rec in atoms.values():
+                    vals = rec.get("charges") or []
+                    if vals:
+                        charges.append(float(vals[0]))
+                if not charges:
+                    suspicious_resp.append(conf_dir.name)
+                    continue
+                if any(not math.isfinite(v) for v in charges):
+                    suspicious_resp.append(conf_dir.name)
+                    continue
+                if max(abs(v) for v in charges) < 1e-8:
+                    # Classic failure mode: everything is 0.0 in *_resp.mol2
+                    suspicious_resp.append(conf_dir.name)
+                net = float(sum(charges))
+                resp_nets.append(net)
+                resp_atom_counts.append(len(charges))
+                if abs(net - target_net) > 0.5:
+                    large_net_deviation.append(conf_dir.name)
+            except Exception:
+                parse_fail.append(conf_dir.name)
+
+        total_dirs = len(conf_dirs)
+        with_resp = total_dirs - len(missing_resp)
+        logging.info(
+            "[step6] Conformer RESP outputs: dirs=%d with_resp=%d missing_resp=%d suspicious=%d parse_fail=%d",
+            total_dirs,
+            with_resp,
+            len(missing_resp),
+            len(suspicious_resp),
+            len(parse_fail),
+        )
+        if missing_resp:
+            logging.info("[step6] Missing *_resp.mol2 (first 10): %s", ", ".join(missing_resp[:10]))
+        if suspicious_resp:
+            logging.warning("[step6] Suspicious *_resp.mol2 (first 10): %s", ", ".join(suspicious_resp[:10]))
+        if parse_fail:
+            logging.warning("[step6] Failed to parse *_resp.mol2 (first 10): %s", ", ".join(parse_fail[:10]))
+        if resp_nets:
+            mean_net = statistics.fmean(resp_nets)
+            std_net = statistics.pstdev(resp_nets) if len(resp_nets) > 1 else 0.0
+            min_net = min(resp_nets)
+            max_net = max(resp_nets)
+            logging.info(
+                "[step6] Per-conformer net charge: mean=%.4f std=%.4f min=%.4f max=%.4f target=%.1f",
+                mean_net,
+                std_net,
+                min_net,
+                max_net,
+                target_net,
+            )
+        if large_net_deviation:
+            logging.warning(
+                "[step6] Conformers with |net-target| > 0.5 e (first 10): %s",
+                ", ".join(large_net_deviation[:10]),
+            )
+        if resp_atom_counts:
+            exp_atoms = len(initial_charges_dict)
+            # If atom counts vary, this usually indicates corrupted/mol2 parsing issues.
+            if any(n != exp_atoms for n in resp_atom_counts):
+                bad = sum(1 for n in resp_atom_counts if n != exp_atoms)
+                logging.warning(
+                    "[step6] Atom count mismatch in *_resp.mol2: expected=%d; mismatching_conformers=%d",
+                    exp_atoms,
+                    bad,
+                )
+    except Exception:  # pragma: no cover
+        logging.debug("[step6] input audit failed", exc_info=True)
+
     atoms_dict = extract_charges_from_subdirectories(str(extracted), str(results_dir))
     (results_dir / "charges_dict.json").write_text(json.dumps(atoms_dict, indent=2))
     (results_dir / "initial_charges_dict.json").write_text(json.dumps(initial_charges_dict, indent=2))
@@ -211,6 +305,22 @@ def process_molecule_average_charges(
             logging.warning("[step6] no charge data collected; skipping average_charges.chg emission")
     except Exception:  # pragma: no cover
         logging.debug("[step6] early average_charges.chg write failed", exc_info=True)
+
+    # Net charge summary for the raw mean charges (before any optional filtering/group averaging).
+    try:
+        target_net = float(charge)
+        raw_net = float(sum(rec.get("average_charge", 0.0) for rec in atoms_dict.values()))
+        delta = raw_net - target_net
+        logging.info(
+            "[step6] Net charge (raw mean charges): net=%.4f target=%.1f Δ=%.4f",
+            raw_net,
+            target_net,
+            delta,
+        )
+        if abs(delta) > 0.1:
+            logging.warning("[step6] Net charge deviates from target by > 0.1 e (raw mean charges).")
+    except Exception:  # pragma: no cover
+        logging.debug("[step6] net charge (raw) summary failed", exc_info=True)
 
     try:
         plot_charges_by_atom(atoms_dict, initial_charges_dict, str(plots_dir))
@@ -307,7 +417,7 @@ def process_molecule_average_charges(
                 target_net = float(charge)
             except Exception:
                 target_net = 0.0
-            current_net = sum(v["average_charge"] for v in cleaned_dict.values())
+            current_net = float(sum(v["average_charge"] for v in cleaned_dict.values()))
             deviation = target_net - current_net
             if cleaned_dict:
                 if abs(current_net) < 1e-12:
@@ -318,6 +428,16 @@ def process_molecule_average_charges(
                     for rec in cleaned_dict.values():
                         proportion = rec["average_charge"] / current_net if current_net != 0 else 0.0
                         rec["average_charge"] += proportion * deviation
+            try:
+                after_net = float(sum(v["average_charge"] for v in cleaned_dict.values()))
+                logging.info(
+                    "[step6] Net charge (cleaned): before=%.4f after=%.4f target=%.1f",
+                    current_net,
+                    after_net,
+                    target_net,
+                )
+            except Exception:
+                pass
             (results_dir / "cleaned_adjusted_charges.json").write_text(json.dumps(cleaned_dict, indent=2))
             cleaned_lines = [f"{rec['average_charge']:.4f}" for rec in cleaned_dict.values()]
             cleaned_charges_path = results_dir / "cleaned_average_charges.chg"
@@ -406,6 +526,17 @@ def process_molecule_average_charges(
         prefix = "cleaned_adjusted_group_average_charges" if outlier_removed else "group_average_charges"
         group_avg_chg_path = _write_charge_bundle(results_dir, prefix, group_avg_dict)
         group_average_applied = True
+        try:
+            target_net = float(charge)
+            group_net = float(sum(rec.get("average_charge", 0.0) for rec in group_avg_dict.values()))
+            logging.info(
+                "[step6] Net charge (group-averaged): net=%.4f target=%.1f Δ=%.4f",
+                group_net,
+                target_net,
+                group_net - target_net,
+            )
+        except Exception:  # pragma: no cover
+            logging.debug("[step6] net charge (group avg) summary failed", exc_info=True)
         if plot_histograms:
             try:
                 specs_adj = [
@@ -496,6 +627,7 @@ def process_molecule_average_charges(
             _mark("adjusted", False, True, None, f"error: {e}")
 
     try:
+        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
         dec = build_aggregation_decision(
             protocol=protocol,
             adjust_sym=adjust_sym,
@@ -503,14 +635,24 @@ def process_molecule_average_charges(
             calc_group_average=calc_group_average,
             group_average_applied=group_average_applied,
             symmetry_json_found=symmetry_json_found,
+            symmetry_mode=sym_ensemble,
         )
-        sym_ensemble = getattr(getattr(cfg, "symmetry", None), "ensemble", None)
-        dec.extra.append(("symmetry.mode.ensemble", str(sym_ensemble) if sym_ensemble is not None else "<unset>"))
         dec.log('step6')
     except Exception:  # pragma: no cover
         logging.debug('[step6][decisions] aggregation logging failed', exc_info=True)
 
     # Select final charge file for MOL2 update / ACPYPE
+    def _sum_chg(path: Path) -> tuple[float, int]:
+        total = 0.0
+        n = 0
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            total += float(line)
+            n += 1
+        return total, n
+
     charge_candidates: list[tuple[Path, str]] = [
         (results_dir / "cleaned_adjusted_group_average_charges.chg", f"averaged_{molecule_name}_cleaned.mol2"),
         (results_dir / "cleaned_average_charges.chg", f"averaged_{molecule_name}_cleaned.mol2"),
@@ -520,6 +662,25 @@ def process_molecule_average_charges(
     for chg_path, mol2_name in charge_candidates:
         if chg_path.is_file():
             try:
+                target_net = float(charge)
+                net, nvals = _sum_chg(chg_path)
+                exp_atoms = len(initial_charges_dict)
+                logging.info(
+                    "[step6] Selected charge set: %s (n=%d expected=%d net=%.4f target=%.1f Δ=%.4f)",
+                    chg_path.name,
+                    nvals,
+                    exp_atoms,
+                    net,
+                    target_net,
+                    net - target_net,
+                )
+                if nvals != exp_atoms:
+                    logging.warning(
+                        "[step6] Charge file length mismatch: %s has n=%d, expected=%d (from mol2).",
+                        chg_path.name,
+                        nvals,
+                        exp_atoms,
+                    )
                 updated_mol2_out = results_dir / mol2_name
                 logging.info("[step6] Updating MOL2 with %s and running acpype...", chg_path.name)
                 update_mol2_charges(mol2_source_file_path, str(chg_path), str(updated_mol2_out))

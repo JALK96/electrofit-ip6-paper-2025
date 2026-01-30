@@ -168,6 +168,7 @@ def process_conformer_dir(
             mol_name,
             multi_molecule=multi_mol,
             log_fn=logging.info,
+            step="step5",
             upstream=conf_dir.parent / "electrofit.toml",  # parent is extracted_conforms root
             process_cfg=conf_dir.parent.parent / "electrofit.toml" if len(conf_dir.parts) >= 3 else None,
             molecule_input=project_root / "data" / "input" / mol_name / "electrofit.toml",

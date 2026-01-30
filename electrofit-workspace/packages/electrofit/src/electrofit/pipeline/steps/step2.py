@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, log_run_header, reset_logging, enable_header_dedup
+from electrofit.infra.step_logging import log_relevant_config
+from electrofit.config.loader import load_config, dump_config
 from electrofit.pipeline.molecule_filter import filter_paths_for_molecule
 
 __all__ = ["main"]
@@ -49,7 +51,6 @@ def main():  # pragma: no cover
     args = ap.parse_args()
     project_path = Path(args.project).resolve()
     process_dir = project_path / "process"
-    mdp_source_dir = project_path / "data" / "MDP"
     if not process_dir.is_dir():
         print("[step2] No process directory.")
         return
@@ -79,8 +80,27 @@ def main():  # pragma: no cover
         process_cfg = mol_dir / "electrofit.toml"
         project_defaults = project_path / "electrofit.toml"
         compose_snapshot(dest_dir, project_path, mol_dir.name, multi_molecule=multi_mol, log_fn=logging.info,
+                         step="step2",
                          upstream=upstream_snap, process_cfg=process_cfg, molecule_input=molecule_input,
                          project_defaults=project_defaults, extra_override=Path(args.config) if args.config else None)
+        cfg = load_config(project_path, context_dir=dest_dir, molecule_name=mol_dir.name)
+        try:
+            dump_config(cfg, log_fn=logging.debug)
+        except Exception:  # pragma: no cover
+            logging.debug("[step2] config dump failed", exc_info=True)
+        try:
+            log_relevant_config(
+                "step2",
+                cfg,
+                [
+                    "project.molecule_name",
+                    "project.protocol",
+                    "paths.mdp_dir",
+                    "paths.base_scratch_dir",
+                ],
+            )
+        except Exception:  # pragma: no cover
+            logging.debug("[step2][cfg] selective config logging failed", exc_info=True)
         acpype_dir = None
         for sub in run_gau_dir.iterdir():
             if sub.is_dir() and sub.name.endswith(".acpype"):
@@ -95,6 +115,10 @@ def main():  # pragma: no cover
                     shutil.copy(acpype_dir / fn, dest_dir)
                     logging.info("[step2] Copied %s -> %s", fn, dest_dir)
         md_dest = dest_dir / "MDP"
+        mdp_dir_setting = getattr(getattr(cfg, "paths", None), "mdp_dir", None) or "data/MDP"
+        mdp_source_dir = Path(mdp_dir_setting)
+        if not mdp_source_dir.is_absolute():
+            mdp_source_dir = project_path / mdp_source_dir
         if mdp_source_dir.is_dir():
             if md_dest.exists():
                 shutil.rmtree(md_dest)
