@@ -510,20 +510,26 @@ def main(project_root: str, remove_outlier: bool = False, only=None) -> None:
         # Plotting charges
         equiv_group = None
         if adjust_sym:
-            cwd0 = os.getcwd()
-            try:
-                os.chdir(pis_dir)
-                eq_file = find_file_with_extension("json")
-            finally:
-                os.chdir(cwd0)
-            if eq_file:
-                equiv_group = load_symmetry_groups(os.path.join(pis_dir, eq_file))
-                plot_charges_by_symmetry(
-                    atoms_dict, initial_charges_dict, plots_dir, equiv_group
-                )
+            # Be strict about which JSON we treat as symmetry groups: only equiv_groups.json.
+            # Some run directories also contain other JSONs (e.g., initial_manifest.json)
+            # that are not symmetry mappings and would crash downstream plotting.
+            eq_path = os.path.join(pis_dir, "equiv_groups.json")
+            if os.path.isfile(eq_path):
+                equiv_group = load_symmetry_groups(eq_path)
+                # Validate minimal schema: dict[str, list[str]]
+                if not isinstance(equiv_group, dict) or any(
+                    (not isinstance(k, str)) or (not isinstance(v, list)) for k, v in equiv_group.items()
+                ):
+                    print(
+                        f"[warn] Found {eq_path} but it does not look like an equiv_groups mapping; "
+                        "plotting without symmetry."
+                    )
+                    equiv_group = None
+            if equiv_group:
+                plot_charges_by_symmetry(atoms_dict, initial_charges_dict, plots_dir, equiv_group)
                 plot_charges_by_atom_sym(atoms_dict, initial_charges_dict, plots_dir)
             else:
-                print(f"No symmetry JSON in {pis_dir}; plotting without symmetry.")
+                print(f"No equiv_groups.json in {pis_dir}; plotting without symmetry.")
                 plot_charges_by_atom(atoms_dict, initial_charges_dict, plots_dir)
                 adjust_sym = False  # fall back
         else:
