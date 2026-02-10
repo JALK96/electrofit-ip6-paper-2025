@@ -2,6 +2,7 @@ import io
 import os
 import logging
 import subprocess
+import selectors
 from contextlib import redirect_stderr, redirect_stdout, contextmanager
 from pathlib import Path
 
@@ -109,7 +110,12 @@ def run_command(command, cwd=None):
         # Snapshot of directory before running
         before_items = set(os.listdir(cwd or "."))
 
-        # Launch process
+        # Launch process.
+        #
+        # IMPORTANT: Read stdout+stderr concurrently to avoid deadlocks.
+        # Some tools (notably GROMACS) print a lot to stderr; if we drain
+        # stdout first and only then stderr, the stderr pipe buffer can fill
+        # and block the child process indefinitely.
         process = subprocess.Popen(
             command,
             shell=shell,
@@ -117,27 +123,48 @@ def run_command(command, cwd=None):
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd,
+            bufsize=1,  # line-buffered in text mode
         )
 
-        output_lines, stderr_accum = [], []
-        # Stream stdout
-        for line in iter(process.stdout.readline, ""):
-            if line:
-                logging.info(line.strip())
-                output_lines.append(line)
-        # Stream stderr
-        for line in iter(process.stderr.readline, ""):
-            if line:
-                logging.debug(line.strip())
-                output_lines.append(line)
-                stderr_accum.append(line)
+        output_lines: list[str] = []
+        stderr_accum: list[str] = []
 
-        process.stdout.close()
-        process.stderr.close()
+        sel = selectors.DefaultSelector()
+        assert process.stdout is not None
+        assert process.stderr is not None
+        sel.register(process.stdout, selectors.EVENT_READ, data="stdout")
+        sel.register(process.stderr, selectors.EVENT_READ, data="stderr")
+
+        open_streams = 2
+        while open_streams:
+            for key, _ in sel.select():
+                stream_kind = key.data
+                stream = key.fileobj
+                line = stream.readline()
+                if line:
+                    if stream_kind == "stdout":
+                        logging.info(line.rstrip())
+                    else:
+                        logging.debug(line.rstrip())
+                        stderr_accum.append(line)
+                    output_lines.append(line)
+                else:
+                    # EOF on this stream
+                    try:
+                        sel.unregister(stream)
+                    except Exception:
+                        pass
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                    open_streams -= 1
+
         return_code = process.wait()
 
         if return_code != 0:
-            stderr_text = "".join(stderr_accum).strip() or None
+            # Keep error text compact; this is for quick diagnostics.
+            stderr_text = "".join(stderr_accum[-200:]).strip() or None
             logging.error(
                 f"Command exited with code {return_code}: {log_cmd}"
                 + (f" | stderr: {stderr_text}" if stderr_text else "")

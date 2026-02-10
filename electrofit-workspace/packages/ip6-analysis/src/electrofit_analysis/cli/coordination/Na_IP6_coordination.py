@@ -2,10 +2,20 @@
 """
 Na_IP6_coordination.py (CLI)
 
-Iterates micro-state folders under a project's process directory, builds a
-Boolean coordination tensor (N_ion, 6, N_frames) indicating whether each cation
-is closer than RCUTOFF to any peripheral oxygen of P1..P6, aggregates to
-time-series counts, and produces plots.
+Iterates micro-state folders under a project's process directory and computes
+coordination counts per phosphate using a *nearest-phosphate* assignment:
+
+- For each ion and frame, compute the minimum distance to the 3 peripheral
+  oxygens of each phosphate group.
+- Assign the ion to the single phosphate with the smallest such distance,
+  provided that this minimum distance is below the cutoff.
+
+This produces a Boolean tensor (N_ion, 6, N_frames) that is aggregated into
+time-series counts and plotted.
+
+Optionally, an additional *non-exclusive contacts* tensor can be written, where
+an ion can be in contact with multiple phosphates in the same frame (any
+phosphate with min(peripheral-O) distance < cutoff).
 
 CLI usage:
     python -m electrofit_analysis.cli.coordination.Na_IP6_coordination \
@@ -58,7 +68,30 @@ PLOT_NAME_TEMPLATE = "NaP_coordination_counts.png"
 
 RCUTOFF_NM         = 0.32       # coordination threshold  (change if desired)
 SAVE_3D_BOOL       = True       # turn off if disk space is an issue
-BOOL_FILENAME      = "NaP_coordination_bool.npy"   # stored as numpy.memmap
+BOOL_FILENAME      = "NaP_coordination_bool.npy"   # legacy nearest-phosphate tensor (stored as numpy.memmap)
+NEAREST_BOOL_ALIAS = "IonP_nearest_bool.npy"       # generic alias name for BOOL_FILENAME
+CONTACTS_FILENAME  = "IonP_contacts_bool.npy"      # non-exclusive contacts tensor (stored as numpy.memmap)
+
+
+def _link_or_copy_bool_tensor(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """Create dst as an alias of src (hardlink preferred, then symlink, then copy)."""
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+    try:
+        os.link(src, dst)
+        return
+    except Exception:
+        pass
+    try:
+        # Relative symlink to keep the directory self-contained.
+        dst.symlink_to(src.name)
+        return
+    except Exception:
+        pass
+    # Fallback: copy (file is typically small: N_ion*6*N_frames booleans)
+    import shutil
+
+    shutil.copyfile(src, dst)
 
 # Mapping: phosphate → peripheral O atom names (no ester O)
 PHOS_OXYGENS: Dict[str, Tuple[str, ...]] = {
@@ -172,8 +205,10 @@ def analyse_one_microstate(
     n_phos     = len(PHOS_LABELS)
     bool_shape = (n_na, n_phos, n_frames)          # (i, j, k)
     coord_mem  = None
+    contacts_mem = None
     if SAVE_3D_BOOL:
         mmap_path = dest_dir / BOOL_FILENAME
+        contacts_path = dest_dir / CONTACTS_FILENAME
         # open_memmap writes a valid .npy header; np.memmap does NOT
         coord_mem = np.lib.format.open_memmap(
             mmap_path, mode='w+', dtype=np.bool_, shape=bool_shape
@@ -181,8 +216,17 @@ def analyse_one_microstate(
         coord_mem[:] = False      # initialise so file is fully allocated
         coord_mem.flush()
         logging.info(
-            "Boolean tensor mapped to %s  (≈ %.1f MB).",
+            "Nearest-phosphate tensor mapped to %s  (≈ %.1f MB).",
             mmap_path, coord_mem.nbytes / 1e6
+        )
+        contacts_mem = np.lib.format.open_memmap(
+            contacts_path, mode="w+", dtype=np.bool_, shape=bool_shape
+        )
+        contacts_mem[:] = False
+        contacts_mem.flush()
+        logging.info(
+            "Contacts tensor mapped to %s  (≈ %.1f MB).",
+            contacts_path, contacts_mem.nbytes / 1e6
         )
 
     # ── Frame-by-frame loop (vectorised in C under the hood) ──
@@ -208,6 +252,8 @@ def analyse_one_microstate(
         # Update Boolean tensor and counts
         if SAVE_3D_BOOL:
             coord_mem[np.arange(n_na), closest_phos_idx, k] = coordin_mask
+            # Non-exclusive contacts: any phosphate whose min(peripheral-O) distance is < cutoff
+            contacts_mem[:, :, k] = min_dists < (r_cut_nm * 10)
 
         # Aggregate counts per phosphate for this frame
         for j in range(n_phos):
@@ -216,6 +262,12 @@ def analyse_one_microstate(
     # Flush memmap to disk
     if SAVE_3D_BOOL:
         coord_mem.flush()
+        contacts_mem.flush()
+        try:
+            _link_or_copy_bool_tensor(dest_dir / BOOL_FILENAME, dest_dir / NEAREST_BOOL_ALIAS)
+            logging.info("Wrote alias tensor name %s -> %s", NEAREST_BOOL_ALIAS, BOOL_FILENAME)
+        except Exception:
+            logging.exception("Failed to create alias %s for %s", NEAREST_BOOL_ALIAS, BOOL_FILENAME)
 
     # ── Plot counts vs. time ─────────────────────────────────
     plot_counts_subplots(

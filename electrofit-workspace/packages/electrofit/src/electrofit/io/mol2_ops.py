@@ -286,19 +286,31 @@ def parse_mol2(mol2_file):
 
 def parse_charges_from_mol2(mol2_file):
     """
-    Parses the MOL2 file to extract atom names and charges.
+    Parses the MOL2 file to extract per-atom charges.
 
     Parameters:
     - mol2_file: Path to the MOL2 file.
 
     Returns:
-    - atoms: Dictionary mapping atom names to a list of charges.
+    - atoms: Ordered dictionary mapping *unique* atom keys (in MOL2 atom order)
+      to a list of charges.
+
+    Notes
+    -----
+    MOL2 atom names are not guaranteed to be unique (e.g. many files name atoms
+    simply "C", "O", "H"). Downstream Step6 aggregation expects a 1:1 mapping
+    between atoms and charge values, so we normalise names into a stable,
+    unique scheme based on element symbol + running index in file order
+    (e.g. O1..On, C1..Cn, H1..Hn).
     """
-    atoms = {}
+    import re
+
+    atoms: dict[str, dict] = {}
     with open(mol2_file, "r") as f:
         lines = f.readlines()
 
     section = None
+    element_counts: dict[str, int] = {}
     for line in lines:
         line = line.strip()
         if line.startswith("@<TRIPOS>ATOM"):
@@ -316,9 +328,13 @@ def parse_charges_from_mol2(mol2_file):
                 continue  # Incomplete atom line
             atom_name = parts[1]
             atom_charge = float(parts[8])
-            if atom_name not in atoms:
-                atoms[atom_name] = {"charges": []}
-            atoms[atom_name]["charges"].append(atom_charge)
+            # Derive element symbol from atom name (1–2 letters).
+            # Fall back to the full atom_name if it doesn't match the pattern.
+            elem_match = re.match(r"^([A-Z][a-z]?)", atom_name)
+            element = elem_match.group(1) if elem_match else atom_name
+            element_counts[element] = element_counts.get(element, 0) + 1
+            unique_name = f"{element}{element_counts[element]}"
+            atoms[unique_name] = {"charges": [atom_charge]}
         else:
             continue
 
