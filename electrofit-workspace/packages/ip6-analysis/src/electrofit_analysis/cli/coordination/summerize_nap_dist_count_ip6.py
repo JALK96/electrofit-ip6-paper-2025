@@ -3,16 +3,16 @@
 summarize_nap_dist_count.py
 
 Walks through IP_* subdirectories under a derived root directory, reading
-Na+–phosphate distance and ion count files from analyze_final_sim/NaP_dist_count/,
-and (optionally) NaP_coordination/NaP_coordination_bool.npy, computing summary
+Na+–phosphate distance and ion count files from analyze_final_sim/IonP_dist_count/,
+and (optionally) IonP_coordination/IonP_coordination_bool.npy, computing summary
 statistics and producing summary plots grouped by binary patterns (5 ones, 4 ones, 3 ones).
 
 Now supports selective generation via CLI flags:
 
   Metrics (mutually non-exclusive; if none given, all metrics are run):
-    --distance        Run distance summaries (distances_NaP*.xvg)
+    --distance        Run distance summaries (distances_IonP*.xvg)
     --count           Run count summaries (ion_count_P*.xvg)
-    --coordination    Run coordination summaries (NaP_coordination_bool.npy)
+    --coordination    Run coordination summaries (IonP_coordination_bool.npy)
 
   Plot types:
     --plots means,box,overlaid,stats          # for distance/count (default: all four)
@@ -75,7 +75,7 @@ def load_values(xvg_path):
 
 def load_bool_counts(npy_path):
     """
-    Read NaP_coordination_bool.npy and return a list of six numpy arrays,
+    Read IonP_coordination_bool.npy and return a list of six numpy arrays,
     each containing the per–frame Na+ count for one phosphate (P1…P6).
     File stores a Boolean tensor of shape (N_Na, 6, N_frames).
     """
@@ -93,7 +93,7 @@ def load_bool_counts(npy_path):
 def write_stats_coord(root_dir, output_dir, analyze_base: str, metric_name="coordcount"):
     """
     Compute mean and std for each pattern and phosphate from Boolean coordination
-    tensor (NaP_coordination_bool.npy) and save to <output_dir>/<metric_name>_stats.xvg.
+    tensor (IonP_coordination_bool.npy) and save to <output_dir>/<metric_name>_stats.xvg.
     """
     header = ["# pattern"] + [f"P{i}_{stat}" for i in range(1, 7) for stat in ("mean", "std")]
     lines = [" ".join(header)]
@@ -101,7 +101,7 @@ def write_stats_coord(root_dir, output_dir, analyze_base: str, metric_name="coor
     for group, patterns in GROUPS.items():
         for pat in patterns:
             npy_path = os.path.join(
-                root_dir, f"IP_{pat}", analyze_base, "NaP_coordination", "NaP_coordination_bool.npy"
+                root_dir, f"IP_{pat}", analyze_base, "IonP_coordination", "IonP_coordination_bool.npy"
             )
             arrs = load_bool_counts(npy_path)
             stats = []
@@ -129,7 +129,7 @@ def write_stats(root_dir, output_dir, analyze_base: str, metric_name, file_prefi
             stats = []
             for suf in suffixes:
                 fname = f"{file_prefix}{suf}.xvg"
-                fpath = os.path.join(root_dir, f"IP_{pat}", analyze_base, "NaP_dist_count", fname)
+                fpath = os.path.join(root_dir, f"IP_{pat}", analyze_base, "IonP_dist_count", fname)
                 vals = load_values(fpath)
                 if vals.size:
                     stats.append(f"{np.mean(vals):.5f}")
@@ -151,7 +151,7 @@ def summarize_metric(root_dir, output_dir, analyze_base: str, metric_name, file_
         for pat in patterns:
             means = []
             for suf in suffixes:
-                fpath = os.path.join(root_dir, f"IP_{pat}", analyze_base, "NaP_dist_count", f"{file_prefix}{suf}.xvg")
+                fpath = os.path.join(root_dir, f"IP_{pat}", analyze_base, "IonP_dist_count", f"{file_prefix}{suf}.xvg")
                 means.append(load_mean_value(fpath))
             all_means.append(means)
 
@@ -199,7 +199,7 @@ def summarize_metric_overlaid(root_dir, output_dir, analyze_base: str, metric_na
             means = []
             for suf in suffixes:
                 fpath = os.path.join(
-                    root_dir, f"IP_{pat}", analyze_base, "NaP_dist_count", f"{file_prefix}{suf}.xvg"
+                    root_dir, f"IP_{pat}", analyze_base, "IonP_dist_count", f"{file_prefix}{suf}.xvg"
                 )
                 m = load_mean_value(fpath)
                 means.append(m)
@@ -244,7 +244,7 @@ def summarize_metric_boxplot(root_dir, output_dir, analyze_base: str, metric_nam
         for pat in patterns:
             per_p = []
             for suf in suffixes:
-                fp = os.path.join(root_dir, f"IP_{pat}", analyze_base, "NaP_dist_count", f"{file_prefix}{suf}.xvg")
+                fp = os.path.join(root_dir, f"IP_{pat}", analyze_base, "IonP_dist_count", f"{file_prefix}{suf}.xvg")
                 vals = load_values(fp)
                 per_p.append(vals)
             all_data.append(per_p)
@@ -392,13 +392,13 @@ def run_distance(root_dir, output_dir, plots, analyze_base: str):
     """Run selected plot types for distance metric."""
     suf = [str(i) for i in range(1, 7)]
     if "means" in plots:
-        summarize_metric(root_dir, output_dir, analyze_base, "distance", "distances_NaP", suf, "Mean Na⁺–P distance (nm)")
+        summarize_metric(root_dir, output_dir, analyze_base, "distance", "distances_IonP", suf, "Mean Na⁺–P distance (nm)")
     if "box" in plots:
-        summarize_metric_boxplot(root_dir, output_dir, analyze_base, "distance", "distances_NaP", suf, "Na⁺–P distance (nm)")
+        summarize_metric_boxplot(root_dir, output_dir, analyze_base, "distance", "distances_IonP", suf, "Na⁺–P distance (nm)")
     if "overlaid" in plots:
-        summarize_metric_overlaid(root_dir, output_dir, analyze_base, "distance", "distances_NaP", suf, "Mean Na⁺–P distance (nm)")
+        summarize_metric_overlaid(root_dir, output_dir, analyze_base, "distance", "distances_IonP", suf, "Mean Na⁺–P distance (nm)")
     if "stats" in plots:
-        write_stats(root_dir, output_dir, analyze_base, "distance", "distances_NaP", suf)
+        write_stats(root_dir, output_dir, analyze_base, "distance", "distances_IonP", suf)
 
 
 def run_count(root_dir, output_dir, plots, analyze_base: str):
@@ -417,7 +417,7 @@ def run_count(root_dir, output_dir, plots, analyze_base: str):
 def run_coordination(root_dir, output_dir, plots, analyze_base: str):
     """Run selected plot types for coordination metric."""
     def _coord_loader(pattern, _root=root_dir):
-        npy_path = os.path.join(_root, f"IP_{pattern}", analyze_base, "NaP_coordination", "NaP_coordination_bool.npy")
+        npy_path = os.path.join(_root, f"IP_{pattern}", analyze_base, "IonP_coordination", "IonP_coordination_bool.npy")
         if not os.path.isfile(npy_path):
             print(f"[WARN] Boolean tensor not found for pattern {pattern}: {npy_path}")
         arrs = load_bool_counts(npy_path)

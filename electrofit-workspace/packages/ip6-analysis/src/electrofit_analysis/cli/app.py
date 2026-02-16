@@ -5,11 +5,11 @@ Provides subcommands that forward to existing CLI modules in this package.
 
 Subcommands
 -----------
-- distance:     Compute Na–P distances for IP6 microstates.
-- count:        Compute Na–P distances, Na+ counts, buried volume, and excess.
+- distance:     Compute ion–P distances for IP6 microstates.
+- count:        Compute ion–P distances, ion counts, buried volume, and excess.
 - summarize-nap:    Summarize distances/counts/coordination across patterns (requires out dir).
 - plot-2d:      Render 2D molecule depictions for microstates.
-- coordination: Analyze Na–IP6 coordination (counts, RDFs, optional projections).
+- coordination: Analyze ion–IP6 coordination (counts, RDFs, optional projections).
 
 Usage examples
 --------------
@@ -50,6 +50,8 @@ def _cmd_count(args: argparse.Namespace) -> None:
         stage=getattr(args, 'stage', 'final'),
         only=only,
         rep=getattr(args, 'rep', None),
+        ion_name=getattr(args, 'ion_name', 'NA'),
+        cutoff_nm=getattr(args, 'cutoff_nm', 0.5),
     )
 
 
@@ -125,6 +127,9 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rep=getattr(args, 'rep', None),
         boxplot=getattr(args, 'boxplot', True),
         ion_name=getattr(args, 'ion_name', 'NA'),
+        rdf_norm=getattr(args, 'rdf_norm', 'rdf'),
+        rdf_scale=getattr(args, 'rdf_scale', 'per-phosphate'),
+        rdf_oxygen_mode=getattr(args, 'rdf_oxygen_mode', 'pooled'),
         rdf_show_first_shell=getattr(args, 'rdf_show_first_shell', False),
         rdf_cutoff_mode=getattr(args, 'rdf_cutoff_mode', 'fixed'),
         project_mode=getattr(args, 'project_mode', 'auto'),
@@ -221,8 +226,19 @@ def build_parser() -> argparse.ArgumentParser:
     # count
     p_count = sub.add_parser(
         "dist-count",
+        formatter_class=argparse.RawTextHelpFormatter,
         help=(
-            "Run Na–P distances, Na+ counts, buried volume, and excess analysis for the IP6 project."
+            "Run ion–P distances, ion-count time series, buried volume, and excess-ion analysis."
+        ),
+        description=(
+            "Run ion–phosphate distance/count analysis per microstate.\n\n"
+            "For each selected run this command:\n"
+            "  1) creates/updates an index with phosphate groups (P, P1..P5),\n"
+            "  2) computes min distance time series with gmx pairdist (distances_IonP*.xvg),\n"
+            "  3) computes ion counts within cutoff per phosphate with gmx select (ion_count_*.xvg),\n"
+            "  4) computes framewise buried volume with gmx sasa (buriedVol_*.xvg),\n"
+            "  5) computes excess-ion factor N_excess(t) and plots summary PDFs.\n\n"
+            "Outputs are written under analyze_*_sim/IonP_dist_count."
         ),
     )
     p_count.add_argument(
@@ -241,6 +257,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replica index for stage=remd (e.g. 0..N-1).",
     )
     p_count.add_argument("-m", "--molecule", action="append", help="Molecule(s) to include (repeat or comma-separated).")
+    p_count.add_argument(
+        "--ion-name",
+        default="NA",
+        help="Ion atom name used for pairdist/select (e.g. NA, K, MG, CA).",
+    )
+    p_count.add_argument(
+        "--cutoff-nm",
+        type=float,
+        default=0.5,
+        help="Cutoff in nm for per-phosphate ion counts and buried-volume/excess calculations (default: 0.5).",
+    )
     p_count.set_defaults(func=_cmd_count)
 
 
@@ -264,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     # NEW: metric selectors (non-mutually-exclusive)
     p_sum.add_argument(
         "--distance", action="store_true",
-        help="Generate distance summaries (requires: distances_NaP*.xvg). If none of --distance/--count/--coordination is given, all are run."
+        help="Generate distance summaries (requires: distances_IonP*.xvg). If none of --distance/--count/--coordination is given, all are run."
     )
     p_sum.add_argument(
         "--count", action="store_true",
@@ -272,7 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_sum.add_argument(
         "--coordination", action="store_true",
-        help="Generate coordination summaries (requires: NaP_coordination_bool.npy)."
+        help="Generate coordination summaries (requires: IonP_coordination_bool.npy)."
     )
 
     # NEW: plot-type toggles
@@ -310,8 +337,26 @@ def build_parser() -> argparse.ArgumentParser:
     # coordination
     p_coord = sub.add_parser(
         "coordination",
+        formatter_class=argparse.RawTextHelpFormatter,
         help=(
             "Analyze ion–IP6 coordination across microstates (counts, RDFs, optional projections)."
+        ),
+        description=(
+            "Run ion–IP6 coordination analysis per microstate.\n\n"
+            "For each trajectory this command:\n"
+            "  1) builds nearest-phosphate and non-exclusive contact boolean tensors,\n"
+            "  2) computes per-phosphate RDFs between peripheral O groups and the selected ion,\n"
+            "  3) derives cutoff diagnostics (fixed or first-shell),\n"
+            "  4) writes plots + CSV tables with the RDF curves and per-phosphate summary stats.\n\n"
+            "RDF definitions:\n"
+            "  --rdf-norm rdf            : normalized radial distribution function g(r)\n"
+            "  --rdf-norm density        : single-particle density n(r)\n"
+            "  --rdf-norm none           : raw shell counts\n"
+            "  --rdf-scale raw           : use InterRDF output directly (per-oxygen average)\n"
+            "  --rdf-scale per-phosphate : scale raw RDF by 3 (sum over 3 peripheral O sites)\n"
+            "  --rdf-oxygen-mode pooled  : one RDF per phosphate using all 3 terminal oxygens\n"
+            "  --rdf-oxygen-mode per-oxygen : three RDF curves per phosphate (one per terminal oxygen)\n"
+            "  --rdf-oxygen-mode both    : write both pooled and per-oxygen RDF outputs\n"
         ),
     )
     p_coord.add_argument(
@@ -357,6 +402,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to an RDF cache file (JSON). Reuse or refresh cached RDF curves.",
     )
     p_coord.add_argument(
+        "--rdf-norm",
+        choices=["rdf", "density", "none"],
+        default="rdf",
+        help=(
+            "InterRDF normalization mode: rdf (g(r), default), density (n(r)), or none (raw shell counts)."
+        ),
+    )
+    p_coord.add_argument(
+        "--rdf-scale",
+        choices=["raw", "per-phosphate"],
+        default="per-phosphate",
+        help=(
+            "RDF scaling for plotting/integration: raw (per oxygen) or per-phosphate (raw×3). "
+            "The selected scale is also used when deriving a global RDF y-limit."
+        ),
+    )
+    p_coord.add_argument(
+        "--rdf-oxygen-mode",
+        choices=["pooled", "per-oxygen", "both"],
+        default="pooled",
+        help=(
+            "RDF oxygen grouping for plots/CSV: pooled (default), per-oxygen (3 curves per phosphate), "
+            "or both (write both output sets)."
+        ),
+    )
+    p_coord.add_argument(
         "--rdf-show-first-shell",
         action="store_true",
         help="Draw a dotted line at the RDF first-shell end (first minimum after first peak).",
@@ -365,7 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--rdf-cutoff-mode",
         choices=["fixed", "first-shell"],
         default="fixed",
-        help="RDF cutoff/integration mode: fixed (uses r_cut_nm) or first-shell (uses RDF minimum).",
+        help=(
+            "RDF cutoff/integration mode: fixed (uses r_cut_nm) or first-shell "
+            "(uses first minimum of the scaled RDF)."
+        ),
     )
     p_coord.add_argument(
         "--project-mode",
@@ -398,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_coord.add_argument(
         "--ion-name",
         default="NA",
-        help="Atom name of the cation to analyze (e.g. NA, K).",
+        help="Atom name of the cation to analyze (e.g. NA, K, MG, CA).",
     )
     p_coord.add_argument(
         "--no-boxplot",

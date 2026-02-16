@@ -29,8 +29,19 @@ sns.set_context("talk")
 
 # keep only the shared utility; local duplicate removed to satisfy linter
 
+def _format_ion_label(ion_name: str) -> str:
+    ion_upper = (ion_name or "").strip().upper()
+    mapping = {
+        "NA": r"Na$^+$",
+        "K": r"K$^+$",
+        "MG": r"Mg$^{2+}$",
+        "CA": r"Ca$^{2+}$",
+    }
+    return mapping.get(ion_upper, ion_upper)
+
+
 def plot_ion_counts_subplots(
-    output_prefix, groups, plot_filename="ion_counts_subplots.pdf"
+    output_prefix, groups, plot_filename="ion_counts_subplots.pdf", ion_label: str = "Na+"
 ):
     """Plot number of ions within cutoff for each group using generic grid plotter."""
     files = [f"{output_prefix}{g}.xvg" for g in groups]
@@ -38,7 +49,7 @@ def plot_ion_counts_subplots(
     plot_timeseries_grid(
         files=files,
         labels=labels,
-        ylabel="Na+ ions",
+        ylabel=f"{ion_label} ions",
         outfile=plot_filename,
         suptitle=None,  # was commented out zuvor
         unit_scale=1000.0,  # ps → ns
@@ -51,9 +62,13 @@ def plot_ion_counts_subplots(
         xlabel="Time (ns)",
     )
 
-def plot_whole_molecule_ion_count(xvg_file, plot_filename="ion_count_whole_mol.pdf"):
+def plot_whole_molecule_ion_count(
+    xvg_file,
+    plot_filename="ion_count_whole_mol.pdf",
+    ion_label: str = "Na+",
+):
     """
-    Plots a single line: # of NA ions within cutoff for the entire molecule vs time.
+    Plots a single line: number of ions within cutoff for the entire molecule vs time.
     """
     logging.info("Plotting ion count for the entire molecule...")
     try:
@@ -76,9 +91,9 @@ def plot_whole_molecule_ion_count(xvg_file, plot_filename="ion_count_whole_mol.p
             fontsize=12,
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
-        # plt.title('Na+ Ion Count Near Entire Molecule')
+        # plt.title('Ion Count Near Entire Molecule')
         plt.xlabel("Time (ns)")
-        plt.ylabel("# of Na+ ions")
+        plt.ylabel(f"# of {ion_label} ions")
         plt.tight_layout()
         plt.savefig(plot_filename, dpi=300)
         # plt.show()
@@ -92,7 +107,7 @@ def plot_whole_molecule_ion_count(xvg_file, plot_filename="ion_count_whole_mol.p
 #
 #  N_excess(t) = N_in_sphere(t) / [ c · ( 4/3·π·r³  −  V_IP6(t) ) ]
 #
-#  c           = N_total_Na / V_box  (bulk concentration)
+#  c           = N_total_ion / V_box  (bulk concentration)
 #  V_IP6(t)    = n_IP6_atoms_in_sphere(t) · v_atom_IP6  (per-atom excluded volume)
 #  r           = cutoff_radius used in the gmx select commands.
 #
@@ -117,21 +132,22 @@ def _parse_box_volume_from_gro(gro_file):
         return lx * ly * lz  # nm³
 
 
-def _count_na_atoms_in_gro(gro_file):
+def _count_ion_atoms_in_gro(gro_file, ion_name: str):
     """
-    Counts how many atoms have the string 'NA' in columns 11‑15 (atom name)
+    Counts how many atoms match ion_name in columns 11‑15 (atom name)
     of a .gro file. Works for standard GROMACS naming.
     """
+    ion_upper = ion_name.strip().upper()
     count = 0
     with open(gro_file, "r") as fh:
         lines = fh.readlines()
     # skip first 2 title/atom‑number lines, last line is box
     for line in lines[2:-1]:
         atom_name = line[10:15].strip()
-        if atom_name.startswith("NA"):
+        if atom_name.upper().startswith(ion_upper):
             count += 1
     if count == 0:
-        raise ValueError("No Na⁺ atoms found in structure file; check naming.")
+        raise ValueError(f"No {ion_upper} ions found in structure file; check naming.")
     return count
 
 
@@ -142,29 +158,31 @@ def compute_excess_ion_counts(
     structure_file,
     cutoff_radius,
     output_prefix="excess_",
+    ion_name: str = "NA",
 ):
     """
     Excess‑ion factor using *true* solvent‑accessible volume per frame:
 
         N_excess(t) = N_in_sphere(t) /
-                      [ c_Na · (4/3·π·r³ − V_buried(t)) ]
+                      [ c_ion · (4/3·π·r³ − V_buried(t)) ]
 
     where V_buried(t) is obtained from gmx sasa (-tv) and already has units nm³.
     """
     import math
 
-    # Bulk Na⁺ concentration
-    n_na_total = _count_na_atoms_in_gro(structure_file)
+    ion_upper = ion_name.strip().upper()
+    # Bulk ion concentration
+    n_ion_total = _count_ion_atoms_in_gro(structure_file, ion_upper)
     v_box = _parse_box_volume_from_gro(structure_file)
-    c_na = n_na_total / v_box
+    c_ion = n_ion_total / v_box
 
     v_sphere = (4.0 / 3.0) * math.pi * cutoff_radius**3
     logging.info("============================================================")
     logging.info("EXCESS‑ION FORMULA (grid/SAV version):")
-    logging.info("  N_excess(t) = N_in / [ c_Na · (4/3·π·r³ − V_buried(t)) ]")
+    logging.info("  N_excess(t) = N_in / [ c_ion · (4/3·π·r³ − V_buried(t)) ]")
     logging.info(f"  r = {cutoff_radius:.3f} nm ; 4/3·π·r³ = {v_sphere:.6f} nm³")
     logging.info(
-        f"  c_Na = N_Na_tot / V_Box = {n_na_total}/{v_box:.6f} = {c_na:.6f} nm⁻³"
+        f"  c_ion = N_ion_tot / V_Box = {n_ion_total}/{v_box:.6f} = {c_ion:.6f} nm⁻³"
     )
     logging.info("============================================================")
 
@@ -176,7 +194,7 @@ def compute_excess_ion_counts(
             na_data = np.loadtxt(na_file, comments=("#", "@"))
             buried_data = np.loadtxt(buried_file, comments=("#", "@"))
             if na_data.shape[0] != buried_data.shape[0]:
-                raise ValueError("Frame mismatch between Na and buried‑volume files")
+                raise ValueError("Frame mismatch between ion-count and buried‑volume files")
 
             time_ps = na_data[:, 0]
             n_in = na_data[:, 1]
@@ -185,11 +203,11 @@ def compute_excess_ion_counts(
             # ensure positive effective volume
             v_eff[v_eff <= 1e-9] = 1e-9
 
-            n_solution = c_na * v_eff
+            n_solution = c_ion * v_eff
             n_excess = n_in / n_solution
 
             header = (
-                '@    title "Excess Na+ ions (grid SAV)"\n'
+                f'@    title "Excess {ion_upper} ions (grid SAV)"\n'
                 '@    xaxis  label "Time (ps)"\n'
                 '@    yaxis  label "N_excess"\n'
             )
@@ -238,12 +256,24 @@ def plot_excess_ion_counts_subplots(
 # Main Execution Flow
 # ----------------------------
 
-def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = None) -> None:
-    """Run Na–P distance and ion-count analysis for all molecules under project_dir.
+def main(
+    project_dir: str,
+    stage: str = 'final',
+    only=None,
+    rep: int | None = None,
+    ion_name: str = "NA",
+    cutoff_nm: float = 0.5,
+) -> None:
+    """Run ion–P distance and ion-count analysis for all molecules under project_dir.
 
     Args:
         project_dir: Path to the project root (must contain a 'process' subdirectory).
     """
+    ion_name = ion_name.strip().upper()
+    ion_label = _format_ion_label(ion_name)
+    if cutoff_nm <= 0:
+        raise ValueError(f"cutoff_nm must be > 0, got {cutoff_nm}")
+
     # Define the base process directory
     process_dir = os.path.join(project_dir, "process")
 
@@ -262,7 +292,7 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
 
             if os.path.isdir(run_sim_dir):
                 # Define the destination directory based on stage
-                dest_dir = os.path.join(analyze_base_dir, "NaP_dist_count")
+                dest_dir = os.path.join(analyze_base_dir, "IonP_dist_count")
 
                 os.makedirs(dest_dir, exist_ok=True)
                 os.chdir(dest_dir)
@@ -276,11 +306,11 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                     structure_file = os.path.join(run_sim_dir, "md.gro")
                     trajectory_file = os.path.join(run_sim_dir, "md_center.xtc")
                     topology_file = os.path.join(run_sim_dir, "md.tpr")
-                index_file = os.path.join(dest_dir, "NA_P_index.ndx")
-                selection_group = "NA"
-                # We'll produce distances like distances_NaP1.xvg -> distances_NaP6.xvg
-                output_prefix = "distances_NaP"
-                log_file = "distances_NaP_gmx.log"
+                index_file = os.path.join(dest_dir, "Ion_P_index.ndx")
+                selection_group = ion_name
+                # We'll produce distances like distances_IonP1.xvg -> distances_IonP6.xvg
+                output_prefix = "distances_IonP"
+                log_file = "distances_IonP_gmx.log"
 
                 # List of phosphorus groups
                 p_groups = ["P", "P1", "P2", "P3", "P4", "P5"]
@@ -288,6 +318,12 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                 # Setup logging
                 setup_logging(log_file)
                 logging.info("Logging is set up.")
+                logging.info(
+                    "dist-count parameters: ion_name=%s, cutoff=%.3f nm, stage=%s",
+                    ion_name,
+                    cutoff_nm,
+                    stage,
+                )
 
                 # Check if input files exist
                 input_files = [structure_file, trajectory_file, topology_file]
@@ -330,11 +366,11 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                     output_prefix=output_prefix,
                     num_groups=len(p_groups),
                     plot_filename="all_distances_subplots.pdf",
+                    ion_label=ion_label,
                 )
 
                 # NEW STEPS: Count how many ions are close to each phosphate group
-                # Adjust cutoff as desired, e.g., 0.5 nm
-                cutoff_distance = 0.5
+                cutoff_distance = cutoff_nm
                 ion_count_prefix = "ion_count_"
 
                 run_ion_count_commands(
@@ -352,12 +388,13 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                     output_prefix=ion_count_prefix,
                     groups=p_groups,
                     plot_filename="ion_counts_subplots.pdf",
+                    ion_label=ion_label,
                 )
 
                 # ----------------------------------------------------------------
-                # NEW FEATURE 2: compute & plot excess Na⁺ counts
+                # compute & plot excess-ion counts
                 # ----------------------------------------------------------------
-                excess_prefix = "excess_NaP_"
+                excess_prefix = "excess_IonP_"
                 buried_prefix = "buriedVol_"
                 run_buried_volume_commands(
                     trajectory=trajectory_file,
@@ -375,6 +412,7 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                     structure_file=structure_file,
                     cutoff_radius=cutoff_distance,
                     output_prefix=excess_prefix,
+                    ion_name=ion_name,
                 )
                 plot_excess_ion_counts_subplots(
                     output_prefix=excess_prefix,
@@ -389,7 +427,7 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                     topology=topology_file,
                     index_file=index_file,
                     whole_group="Other",  # must exist in your index
-                    selection_group="NA",
+                    selection_group=ion_name,
                     cutoff=cutoff_distance,
                     output_xvg="ion_count_MOL.xvg",
                 )
@@ -397,6 +435,7 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                 plot_whole_molecule_ion_count(
                     xvg_file="ion_count_MOL.xvg",
                     plot_filename="ion_count_whole_mol.pdf",
+                    ion_label=ion_label,
                 )
 
                 logging.info(
@@ -406,7 +445,7 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Compute Na–P distances, Na+ counts, and excess metrics for the IP6 project."
+            "Compute ion–P distances, ion counts, buried volume, and excess metrics for the IP6 project."
         )
     )
     parser.add_argument(
@@ -415,5 +454,27 @@ if __name__ == "__main__":
         required=True,
         help="Path to the project root directory (contains 'process').",
     )
+    parser.add_argument(
+        "--stage",
+        choices=["final", "sample", "remd"],
+        default="final",
+        help="Analyze final, sample, or remd trajectories (default: final).",
+    )
+    parser.add_argument(
+        "--ion-name",
+        default="NA",
+        help="Ion atom name (e.g., NA, K, MG, CA).",
+    )
+    parser.add_argument(
+        "--cutoff-nm",
+        type=float,
+        default=0.5,
+        help="Cutoff in nm for ion-count and buried-volume calculations (default: 0.5).",
+    )
     args = parser.parse_args()
-    main(os.path.abspath(args.project))
+    main(
+        os.path.abspath(args.project),
+        stage=args.stage,
+        ion_name=args.ion_name,
+        cutoff_nm=args.cutoff_nm,
+    )

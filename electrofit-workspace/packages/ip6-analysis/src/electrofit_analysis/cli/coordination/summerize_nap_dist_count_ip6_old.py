@@ -3,7 +3,7 @@
 summarize_nap_dist_count.py
 
 Walks through IP_* subdirectories under a derived root directory, reading
-Na+–phosphate distance and ion count files from analyze_final_sim/NaP_dist_count/,
+Na+–phosphate distance and ion count files from analyze_final_sim/IonP_dist_count/,
 computing mean values per phosphate, and producing summary plots for three
 groups of patterns (5 ones, 4 ones, 3 ones). Generates six vector PDFs:
   - distance_5ones.pdf, distance_4ones.pdf, distance_3ones.pdf
@@ -75,7 +75,7 @@ def load_values(xvg_path):
 
 def load_bool_counts(npy_path):
     """
-    Read NaP_coordination_bool.npy and return a list of six numpy arrays,
+    Read IonP_coordination_bool.npy and return a list of six numpy arrays,
     each containing the per–frame Na⁺‐count for one phosphate (P1…P6).
     The file stores a Boolean tensor of shape (N_Na, 6, N_frames).
     """
@@ -94,7 +94,7 @@ def load_bool_counts(npy_path):
 def write_stats_coord(root_dir, output_dir, metric_name="coordcount"):
     """
     Compute mean and std for each pattern and phosphate based on the
-    Boolean coordination tensor (NaP_coordination_bool.npy) and save to
+    Boolean coordination tensor (IonP_coordination_bool.npy) and save to
     <output_dir>/<metric_name>_stats.xvg
 
     The output header mirrors the format of write_stats() so downstream
@@ -111,11 +111,11 @@ def write_stats_coord(root_dir, output_dir, metric_name="coordcount"):
                 root_dir,
                 f"IP_{pat}",
                 "analyze_final_sim",
-                "NaP_coordination",
-                "NaP_coordination_bool.npy",
+                "IonP_coordination",
+                "IonP_coordination_bool.npy",
             )
             npy_path_flat = os.path.join(
-                root_dir, f"IP_{pat}", "analyze_final_sim", "NaP_coordination_bool.npy"
+                root_dir, f"IP_{pat}", "analyze_final_sim", "IonP_coordination_bool.npy"
             )
             if os.path.isfile(npy_path_sub):
                 arrs = load_bool_counts(npy_path_sub)
@@ -154,7 +154,7 @@ def write_stats(root_dir, output_dir, metric_name, file_prefix, suffixes):
             for suf in suffixes:
                 fname = f"{file_prefix}{suf}.xvg"
                 fpath = os.path.join(
-                    root_dir, f"IP_{pat}", "analyze_final_sim", "NaP_dist_count", fname
+                    root_dir, f"IP_{pat}", "analyze_final_sim", "IonP_dist_count", fname
                 )
                 vals = load_values(fpath)
                 if vals.size:
@@ -181,7 +181,7 @@ def summarize_metric(root_dir, output_dir, metric_name, file_prefix, suffixes, y
             for suf in suffixes:
                 fname = f"{file_prefix}{suf}.xvg"
                 fpath = os.path.join(
-                    root_dir, f"IP_{pat}", "analyze_final_sim", "NaP_dist_count", fname
+                    root_dir, f"IP_{pat}", "analyze_final_sim", "IonP_dist_count", fname
                 )
                 means.append(load_mean_value(fpath))
             all_means.append(means)
@@ -251,7 +251,7 @@ def summarize_metric_overlaid(
                     root_dir,
                     f"IP_{pat}",
                     "analyze_final_sim",
-                    "NaP_dist_count",
+                    "IonP_dist_count",
                     f"{file_prefix}{suf}.xvg",
                 )
                 m = load_mean_value(fpath)
@@ -311,7 +311,7 @@ def summarize_metric_boxplot(
             for suf in suffixes:
                 fn = f"{file_prefix}{suf}.xvg"
                 fp = os.path.join(
-                    root_dir, f"IP_{pat}", "analyze_final_sim", "NaP_dist_count", fn
+                    root_dir, f"IP_{pat}", "analyze_final_sim", "IonP_dist_count", fn
                 )
                 vals = load_values(fp)
                 per_p.append(vals)
@@ -569,12 +569,12 @@ def summarize_boxplot_generic(
 def main(root_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
-    # --- DISTANCES: files distances_NaP1.xvg … distances_NaP6.xvg
+    # --- DISTANCES: files distances_IonP1.xvg … distances_IonP6.xvg
     summarize_metric(
         root_dir,
         output_dir,
         metric_name="distance",
-        file_prefix="distances_NaP",
+        file_prefix="distances_IonP",
         suffixes=[str(i) for i in range(1, 7)],  # '1','2',…,'6'
         ylabel="Mean Na⁺–P distance (nm)",
     )
@@ -594,7 +594,7 @@ def main(root_dir, output_dir):
         root_dir,
         output_dir,
         metric_name="distance",
-        file_prefix="distances_NaP",
+        file_prefix="distances_IonP",
         suffixes=[str(i) for i in range(1, 7)],
         ylabel="Na⁺–P distance (nm)",
     )
@@ -613,7 +613,7 @@ def main(root_dir, output_dir):
         root_dir,
         output_dir,
         metric_name="distance",
-        file_prefix="distances_NaP",
+        file_prefix="distances_IonP",
         suffixes=[str(i) for i in range(1, 7)],
     )
     write_stats(
@@ -632,7 +632,7 @@ def main(root_dir, output_dir):
         root_dir,
         output_dir,
         metric_name="distance",
-        file_prefix="distances_NaP",
+        file_prefix="distances_IonP",
         suffixes=[str(i) for i in range(1, 7)],
         ylabel="Mean Na⁺–P distance (nm)",
     )
@@ -652,14 +652,14 @@ def main(root_dir, output_dir):
         Return six arrays of Na⁺ counts for IP_<pattern>.
 
         Boolean tensor is expected at:
-            <root_dir>/IP_<pattern>/analyze_final_sim/NaP_coordination/NaP_coordination_bool.npy
+            <root_dir>/IP_<pattern>/analyze_final_sim/IonP_coordination/IonP_coordination_bool.npy
         """
         npy_path = os.path.join(
             _root,
             f"IP_{pattern}",
             "analyze_final_sim",
-            "NaP_coordination",
-            "NaP_coordination_bool.npy",
+            "IonP_coordination",
+            "IonP_coordination_bool.npy",
         )
         if not os.path.isfile(npy_path):
             print(f"[WARN] Boolean tensor not found for pattern {pattern}: {npy_path}")

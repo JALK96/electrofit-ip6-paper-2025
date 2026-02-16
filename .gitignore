@@ -47,3 +47,6 @@ ion_simulation_plan/
 figures/
 test_molbar/
 playground/
+
+# Other directories
+ops/

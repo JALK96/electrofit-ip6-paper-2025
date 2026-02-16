@@ -1,4 +1,5 @@
 from __future__ import annotations
+import csv
 import logging
 import pathlib
 from typing import Dict, Tuple, Literal
@@ -30,6 +31,20 @@ PHOS_OXYGENS: Dict[str, Tuple[str, ...]] = {
 }
 PHOS_LABELS = tuple(PHOS_OXYGENS.keys())   # ('P', 'P1', …)
 PHOS_LABELS_CORRECTED = ('P1', 'P2', 'P3', 'P4', 'P5', 'P6')  # re-order to match the paper
+
+
+def _oxygen_label_one_based(oxygen_name: str) -> str:
+    """
+    Convert oxygen labels to 1-based display labels for plotting.
+    Examples: O -> O1, O1 -> O2, O6 -> O7
+    """
+    match = re.fullmatch(r"([A-Za-z]+)(\d*)", oxygen_name.strip())
+    if not match:
+        return oxygen_name
+    prefix, suffix = match.groups()
+    if suffix == "":
+        return f"{prefix}1"
+    return f"{prefix}{int(suffix) + 1}"
 
 
 # ╔═══════════════════════════════════════════════════════════════╗
@@ -339,53 +354,45 @@ def plot_rdf_periphO_Na(
         cutoff_mode: Literal["fixed", "first-shell"] = "fixed",
         r_cut_nm: float = RCUTOFF_NM,
         rdf_results_override: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None,
+        rdf_norm: Literal["rdf", "density", "none"] = "rdf",
+        rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
+        rdf_oxygen_mode: Literal["pooled", "per-oxygen"] = "pooled",
         ion_name: str = "NA",
         ion_label: Optional[str] = None,
+        ion_density_nm3: Optional[float] = None,
+        mean_volume_nm3: Optional[float] = None,
+        rdf_curve_csv: Optional[pathlib.Path] = None,
+        rdf_summary_csv: Optional[pathlib.Path] = None,
 ) -> None:
-    """Plot Na⁺–peripheral‑oxygen RDFs for **one** microstate.
+    """Plot ion–peripheral‑oxygen RDFs for one microstate.
 
-    Six rows (P1–P6), shared x‑axis and *global* y‑axis that must be supplied
-    via *y_max_global* so **all** microstates use exactly the same scale.
-
-    Parameters
-    ----------
-    u : MDAnalysis.Universe
-        Trajectory of the microstate to analyse.
-    out_png : pathlib.Path
-        Output filename.
-    r_max : float, optional
-        Upper bound of the RDF in **nm**.
-    nbins : int, optional
-        Number of histogram bins.
-    y_max_global : float, keyword‑only, required
-        *Upper* limit of the y‑axis for **all** figures.  Compute this once
-        across the full data set and pass it to every call.  If *None*, an
-        exception is raised so the user does not forget.
-    hide_y_label : bool, optional
-        When `True`, omit the phosphate label text from the y-axis.
-    hide_y_ticklabels : bool, optional
-        When `True`, suppress y tick labels (tick marks remain visible).
-    show_shell_cutoff : bool, optional
-        Toggle drawing the green first-shell cutoff guide.
-    cutoff_mode : {"fixed", "first-shell"}, optional
-        Controls both the vertical cutoff guide and the integration limit used
-        to compute the coordination number displayed in each subplot.
-        - ``fixed`` uses ``r_cut_nm``.
-        - ``first-shell`` uses the first minimum of g(r) after the first peak
-          (per phosphate); falls back to ``r_cut_nm`` if no minimum is detected.
-    r_cut_nm : float, optional
-        Fixed cutoff radius in nm (used when ``cutoff_mode="fixed"`` and as a
-        fallback when the first-shell end cannot be detected).
-    rdf_results_override : dict | None, optional
-        Precomputed RDF arrays in the form ``{label: (r_nm, g_raw)}``. When
-        provided, the expensive InterRDF computation is skipped and these
-        arrays are used directly (``g_raw`` should be the raw RDF, i.e. before
-        multiplying by 3 to obtain per-phosphate curves).
+    Parameters are as before, with additions:
+    - ``rdf_norm``:
+      - ``rdf`` -> normalized RDF g(r) (default).
+      - ``density`` -> single-particle density n(r).
+      - ``none`` -> raw shell counts.
+    - ``rdf_scale``:
+      - ``raw`` -> plot/integrate raw InterRDF values (per-oxygen averaging).
+      - ``per-phosphate`` -> multiply raw RDF by 3 (sum over the 3 peripheral O sites).
+    - ``rdf_oxygen_mode``:
+      - ``pooled`` -> one RDF curve per phosphate using all three terminal O atoms.
+      - ``per-oxygen`` -> three RDF curves per phosphate (one per terminal oxygen).
+    - ``ion_density_nm3`` and ``mean_volume_nm3`` can be supplied by caller for
+      transparent logging and reproducible CN integration metadata.
+    - ``rdf_curve_csv`` and ``rdf_summary_csv`` optionally save all plotted RDF
+      data and per-phosphate statistics used in this figure.
     """
-
     if y_max_global is None:
         raise ValueError("plot_rdf_periphO_Na requires *y_max_global* so all figures share the same scale.")
+    if rdf_norm not in {"rdf", "density", "none"}:
+        raise ValueError(f"Unsupported rdf_norm '{rdf_norm}'")
+    if rdf_scale not in {"raw", "per-phosphate"}:
+        raise ValueError(f"Unsupported rdf_scale '{rdf_scale}'")
+    if rdf_oxygen_mode not in {"pooled", "per-oxygen"}:
+        raise ValueError(f"Unsupported rdf_oxygen_mode '{rdf_oxygen_mode}'")
+
     ion_label = ion_label or f"{ion_name.upper()}⁺"
+    scale_desc = "raw (per oxygen)" if rdf_scale == "raw" else "per-phosphate (raw × 3)"
 
     font_rc = {
         "font.family": "serif",
@@ -393,7 +400,6 @@ def plot_rdf_periphO_Na(
     }
 
     with plt.rc_context(font_rc):
-        # ---- compute RDFs ---------------------------------------------------
         ion_sel = f"name {ion_name}"
         na_ag = u.select_atoms(ion_sel)
         periph_dict = {
@@ -402,27 +408,76 @@ def plot_rdf_periphO_Na(
         }
 
         rdf_results: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        rdf_per_oxygen: Dict[str, list[Tuple[str, int, int, np.ndarray, np.ndarray]]] = {}
+        local_mean_volume_nm3: float | None = None
         if rdf_results_override is None:
             for label, oxy_ag in periph_dict.items():
-                rdf = InterRDF(oxy_ag, na_ag, range=(0, r_max * 10), nbins=nbins)
+                rdf = InterRDF(oxy_ag, na_ag, range=(0, r_max * 10), nbins=nbins, norm=rdf_norm)
                 rdf.run()
-                rdf_results[label] = (rdf.bins / 10.0, rdf.rdf)  # convert Å → nm
+                rdf_results[label] = (rdf.results.bins / 10.0, rdf.results.rdf)  # Å → nm
+                if local_mean_volume_nm3 is None:
+                    vol_cum = getattr(rdf, "volume_cum", None)
+                    n_frames = getattr(rdf, "n_frames", None)
+                    if vol_cum is not None and n_frames:
+                        local_mean_volume_nm3 = float(vol_cum / n_frames) / 1000.0
         else:
             missing = [lab for lab in PHOS_LABELS if lab not in rdf_results_override]
             if missing:
                 raise ValueError(f"rdf_results_override missing labels: {', '.join(missing)}")
             for label in PHOS_LABELS:
                 r_vals, g_vals = rdf_results_override[label]
-                rdf_results[label] = (np.asarray(r_vals, dtype=float),
-                                      np.asarray(g_vals, dtype=float))
+                rdf_results[label] = (
+                    np.asarray(r_vals, dtype=float),
+                    np.asarray(g_vals, dtype=float),
+                )
 
-        # ---- figure & axes --------------------------------------------------
+        if rdf_oxygen_mode == "per-oxygen":
+            for label, oxy_ag in periph_dict.items():
+                rows: list[Tuple[str, int, int, np.ndarray, np.ndarray]] = []
+                oxygen_indices = oxy_ag.indices.tolist()
+                for oxygen_name, oxygen_index in zip(PHOS_OXYGENS[label], oxygen_indices):
+                    single_oxygen_ag = u.atoms[[int(oxygen_index)]]
+                    rdf_single = InterRDF(single_oxygen_ag, na_ag, range=(0, r_max * 10), nbins=nbins, norm=rdf_norm)
+                    rdf_single.run()
+                    rows.append(
+                        (
+                            oxygen_name,
+                            int(oxygen_index),
+                            int(single_oxygen_ag.ids[0]),
+                            rdf_single.results.bins / 10.0,
+                            rdf_single.results.rdf,
+                        )
+                    )
+                    if local_mean_volume_nm3 is None:
+                        vol_cum = getattr(rdf_single, "volume_cum", None)
+                        n_frames = getattr(rdf_single, "n_frames", None)
+                        if vol_cum is not None and n_frames:
+                            local_mean_volume_nm3 = float(vol_cum / n_frames) / 1000.0
+                rdf_per_oxygen[label] = rows
+
+        if mean_volume_nm3 is None:
+            if local_mean_volume_nm3 is not None:
+                mean_volume_nm3 = local_mean_volume_nm3
+            else:
+                mean_volume_nm3 = float(np.prod(u.dimensions[:3]) / 1000.0)
+        if ion_density_nm3 is None and mean_volume_nm3 and mean_volume_nm3 > 0:
+            ion_density_nm3 = float(len(na_ag) / mean_volume_nm3)
+
+        logging.info(
+            "[RDF] ion=%s n_ion=%d norm=%s scale=%s oxygen_mode=%s mean_box_volume=%.3f nm^3 ion_density=%.6f nm^-3",
+            ion_name.upper(),
+            len(na_ag),
+            rdf_norm,
+            scale_desc,
+            rdf_oxygen_mode,
+            float(mean_volume_nm3),
+            float(ion_density_nm3) if ion_density_nm3 is not None else float("nan"),
+        )
+
         sns.set_context("talk")
         n = len(PHOS_LABELS)
         fig, axes = plt.subplots(n, 1, figsize=(6, 1.2 * n), sharex=True, sharey=True)
-        #fig, axes = plt.subplots(n, 1, figsize=(4.5, 1.2 * n), sharex=True, sharey=True)
 
-        # ---- binary code → colours -----------------------------------------
         try:
             parent_name = out_png.parents[2].name
             match = re.search(r"[01]{6}", parent_name)
@@ -433,17 +488,29 @@ def plot_rdf_periphO_Na(
             raise ValueError(f"Unexpected binary code '{binary_code}' in output path")
         colours = ["blue" if bit == "1" else "black" for bit in binary_code]
 
-        # ---- constants for inset -------------------------------------------
-        X_LOWER, X_UPPER = RCUTOFF_NM, 1.2     # nm
-
-        # ---- loop over P1–P6 ------------------------------------------------
+        X_LOWER, X_UPPER = RCUTOFF_NM, 1.2
         shell_ends_nm: list[float] = []
+        curve_rows: list[dict[str, object]] = []
+        summary_rows: list[dict[str, object]] = []
+
         for ax, (label, col) in zip(axes, zip(PHOS_LABELS, colours)):
             r, g_raw = rdf_results[label]
-            g_per_phos = g_raw * 3                    # 3 O atoms → per phosphate
+            oxy_ag = periph_dict[label]
+            n_ox = int(len(oxy_ag))
+            scale_factor = float(n_ox if rdf_scale == "per-phosphate" else 1.0)
+            g_plot = g_raw * scale_factor
+            local_y_peak = float(np.max(g_plot))
 
-            # --- determine first‑shell boundary -----------------------------
-            shell_end = first_shell_end(r, g_per_phos)
+            logging.info(
+                "[RDF] %s <- O_names=%s O_indices=%s O_ids=%s vs %s",
+                label,
+                ",".join(PHOS_OXYGENS[label]),
+                ",".join(map(str, oxy_ag.indices.tolist())),
+                ",".join(map(str, oxy_ag.ids.tolist())),
+                ion_name.upper(),
+            )
+
+            shell_end = first_shell_end(r, g_plot)
             have_shell_end = not np.isnan(shell_end)
             if have_shell_end:
                 shell_ends_nm.append(float(shell_end))
@@ -451,7 +518,6 @@ def plot_rdf_periphO_Na(
             cutoff_nm = r_cut_nm
             if cutoff_mode == "first-shell":
                 if have_shell_end:
-                    # extra guard against pathological detections
                     if shell_end < 0.15:
                         logging.info(
                             "First-shell cutoff for %s was %.3f nm (too small); falling back to fixed cutoff %.3f nm",
@@ -468,9 +534,7 @@ def plot_rdf_periphO_Na(
                         r_cut_nm,
                     )
 
-            # draw guides ------------------------------------------------------
             if cutoff_mode == "first-shell" and have_shell_end:
-                # integration cutoff at the first-shell end
                 ax.axvline(shell_end, color="green", ls=":", lw=1.2)
                 ax.text(
                     shell_end,
@@ -484,7 +548,6 @@ def plot_rdf_periphO_Na(
                 )
                 logging.info("First-shell end for %s: %.3f nm", label, shell_end)
             elif show_shell_cutoff and have_shell_end:
-                # visual guide only (fixed integration cutoff)
                 ax.axvline(shell_end, color="green", ls=":", lw=1.0)
                 ax.text(
                     shell_end,
@@ -498,19 +561,94 @@ def plot_rdf_periphO_Na(
                 )
                 logging.info("First-shell end for %s: %.3f nm", label, shell_end)
 
-            if col == "blue":
-                ax.fill_between(r, g_per_phos, 0.0, color=col, alpha=0.3)
-            ax.plot(r, g_per_phos, lw=1.2, color="black")
+            if rdf_oxygen_mode == "pooled":
+                if col == "blue":
+                    ax.fill_between(r, g_plot, 0.0, color=col, alpha=0.3)
+                ax.plot(r, g_plot, lw=1.2, color="black")
+                oxygen_plot_data: list[tuple[str, tuple[float, float, float], np.ndarray, np.ndarray]] = []
+            else:
+                oxygen_rows = rdf_per_oxygen.get(label, [])
+                oxygen_colors = sns.color_palette("tab10", n_colors=max(3, len(oxygen_rows)))
+                oxygen_plot_data = []
+                for oxygen_idx, (oxygen_name, oxygen_index, oxygen_id, r_single, g_raw_single) in enumerate(oxygen_rows):
+                    r_single_arr = np.asarray(r_single, dtype=float)
+                    g_raw_single_arr = np.asarray(g_raw_single, dtype=float)
+                    g_plot_single = g_raw_single_arr * scale_factor
+                    local_y_peak = max(local_y_peak, float(np.max(g_plot_single)))
+                    line_color = oxygen_colors[oxygen_idx]
+                    oxygen_name_plot = _oxygen_label_one_based(oxygen_name)
+                    ax.plot(
+                        r_single_arr,
+                        g_plot_single,
+                        lw=1.0,
+                        color=line_color,
+                        label=oxygen_name_plot,
+                    )
+                    oxygen_plot_data.append((oxygen_name_plot, line_color, r_single_arr, g_plot_single))
+                    for r_val, g_val_raw, g_val_scaled in zip(r_single_arr, g_raw_single_arr, g_plot_single):
+                        curve_rows.append(
+                            {
+                                "phosphate": label,
+                                "curve_type": "oxygen",
+                                "oxygen_name": oxygen_name,
+                                "r_nm": float(r_val),
+                                "g_raw": float(g_val_raw),
+                                "g_plot": float(g_val_scaled),
+                                "rdf_norm": rdf_norm,
+                                "rdf_scale": rdf_scale,
+                                "scale_factor": scale_factor,
+                                "rdf_oxygen_mode": rdf_oxygen_mode,
+                                "ion_name": ion_name.upper(),
+                            }
+                        )
+                    summary_rows.append(
+                        {
+                            "phosphate": label,
+                            "curve_type": "oxygen",
+                            "oxygen_name": oxygen_name,
+                            "oxygen_names": oxygen_name,
+                            "oxygen_indices": str(oxygen_index),
+                            "oxygen_ids": str(oxygen_id),
+                            "rdf_norm": rdf_norm,
+                            "rdf_scale": rdf_scale,
+                            "scale_factor": scale_factor,
+                            "rdf_oxygen_mode": rdf_oxygen_mode,
+                            "r_peak_raw_nm": float(r_single_arr[np.argmax(g_raw_single_arr)]),
+                            "g_peak_raw": float(np.max(g_raw_single_arr)),
+                            "r_peak_plot_nm": float(r_single_arr[np.argmax(g_plot_single)]),
+                            "g_peak_plot": float(np.max(g_plot_single)),
+                            "first_shell_end_nm": float(first_shell_end(r_single_arr, g_plot_single)),
+                            "integration_cutoff_nm": float(cutoff_nm),
+                            "coordination_number_integrated": float("nan"),
+                            "ion_density_nm3": float(ion_density_nm3) if ion_density_nm3 is not None else float("nan"),
+                            "mean_box_volume_nm3": float(mean_volume_nm3),
+                            "n_ions": int(len(na_ag)),
+                            "n_oxygen_sites": 1,
+                        }
+                    )
+                if oxygen_rows:
+                    ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=1)
+
             if cutoff_mode == "fixed" or not have_shell_end:
                 ax.axvline(r_cut_nm, ymax=0.8, color="black", ls="--", lw=1.0)
 
-            # global y‑scale --------------------------------------------------
             ax.set_ylim(0.0, y_max_global)
+            if local_y_peak > y_max_global:
+                logging.warning(
+                    "RDF peak for %s (%.2f) exceeds global y-limit %.2f. Consider --determine-global-y with --rdf-oxygen-mode %s.",
+                    label,
+                    local_y_peak,
+                    y_max_global,
+                    rdf_oxygen_mode,
+                )
 
-            # y‑axis label ----------------------------------------------------
             if not hide_y_label:
-                ax.set_ylabel(PHOS_LABELS_CORRECTED[PHOS_LABELS.index(label)],
-                              rotation=0, labelpad=40, va="center")
+                ax.set_ylabel(
+                    PHOS_LABELS_CORRECTED[PHOS_LABELS.index(label)],
+                    rotation=0,
+                    labelpad=40,
+                    va="center",
+                )
             else:
                 ax.set_ylabel("")
             ax.yaxis.set_major_locator(plt.MaxNLocator(2))
@@ -519,77 +657,128 @@ def plot_rdf_periphO_Na(
                 ax.tick_params(labelleft=False)
             if ax is not axes[-1]:
                 ax.tick_params(labelbottom=False)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
 
-            # coordination number ---------------------------------------------
             mask_cn = r <= cutoff_nm
-            vol_nm3 = np.prod(u.dimensions[:3]) / 1000.0  # Å³ → nm³
-            rho_ion  = len(na_ag) / vol_nm3
-            logging.info(f"Volume: {vol_nm3:.2f} nm³, Density of {ion_label}: {rho_ion:.2f} nm⁻³")
-            coord_num = 4.0 * np.pi * rho_ion * np.trapezoid(g_per_phos[mask_cn] * r[mask_cn]**2, x=r[mask_cn])
-            ax.text(0.03, 0.8, f"{coord_num:.2f}", transform=ax.transAxes,
-                    ha="left", va="top", fontsize=20, color=col, alpha=0.7)
+            if ion_density_nm3 is not None:
+                coord_num = float(
+                    4.0
+                    * np.pi
+                    * ion_density_nm3
+                    * np.trapezoid(g_plot[mask_cn] * r[mask_cn] ** 2, x=r[mask_cn])
+                )
+            else:
+                coord_num = float("nan")
+            coord_num_text = f"{coord_num:.2f}" if np.isfinite(coord_num) else "n/a"
+            if rdf_oxygen_mode == "pooled":
+                ax.text(
+                    0.03,
+                    0.8,
+                    coord_num_text,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=20,
+                    color=col,
+                    alpha=0.7,
+                )
 
-            # --------  OPTIONAL INSET for "blue" (bit == 1), "black" (bit ==0) ---------
-            if col == "blue" or col == "black":
-                # restrict data to the desired x-window
-                mask_inset = (r >= X_LOWER) & (r <= X_UPPER)
-                r_inset    = r[mask_inset]
-                g_inset    = g_per_phos[mask_inset]
-
-                # create inset: upper-right corner (loc='upper right')
-                axins = inset_axes(ax,
-                                   width = 1.5,   # 35 % of parent
-                                   height = 0.5,
-                                   loc = "upper right",
-                                   borderpad = 1.0)
-
-                # plot and format
+            mask_inset = (r >= X_LOWER) & (r <= X_UPPER)
+            r_inset = r[mask_inset]
+            g_inset = g_plot[mask_inset]
+            axins = inset_axes(ax, width=1.5, height=0.5, loc="upper right", borderpad=1.0)
+            inset_mins: list[float] = []
+            inset_maxs: list[float] = []
+            if rdf_oxygen_mode == "pooled":
                 if col == "blue":
-                    axins.fill_between(r_inset, g_inset, 0,
-                                   color=col, alpha=0.4)
+                    axins.fill_between(r_inset, g_inset, 0, color=col, alpha=0.4)
                 axins.plot(r_inset, g_inset, lw=1.0, color="black")
+                if g_inset.size:
+                    inset_mins.append(float(np.min(g_inset)))
+                    inset_maxs.append(float(np.max(g_inset)))
+            else:
+                for _, line_color, r_single_arr, g_plot_single in oxygen_plot_data:
+                    mask_single = (r_single_arr >= X_LOWER) & (r_single_arr <= X_UPPER)
+                    if not np.any(mask_single):
+                        continue
+                    r_single_inset = r_single_arr[mask_single]
+                    g_single_inset = g_plot_single[mask_single]
+                    axins.plot(r_single_inset, g_single_inset, lw=1.0, color=line_color)
+                    inset_mins.append(float(np.min(g_single_inset)))
+                    inset_maxs.append(float(np.max(g_single_inset)))
+            axins.set_xlim(X_LOWER, X_UPPER)
+            if inset_mins and inset_maxs:
+                y_min, y_max = min(inset_mins), max(inset_maxs)
+            else:
+                y_min, y_max = 0.0, 1.0
+            if r_inset.size:
+                x_min, x_max = float(np.min(r_inset)), float(np.max(r_inset))
+            else:
+                x_min, x_max = X_LOWER, X_UPPER
+            axins.set_ylim(y_min * 0.98, y_max * 1.02)
+            axins.set_yticks([y_max])
+            axins.set_yticklabels([f"{y_max:.0f}"], fontsize=18)
+            axins.tick_params(axis="y", which="both", direction="out", left=False, right=False, labelright=False)
+            if ax is not axes[0]:
+                axins.tick_params(axis="x", bottom=False, labelbottom=False)
+            else:
+                axins.set_xticks([x_min, x_max])
+                axins.set_xticklabels([f"{x_min:.2f}", f"{x_max:.2f}"], fontsize=18)
+                axins.tick_params(axis="x", top=False, labeltop=True, bottom=False, labelbottom=False)
 
-                # set limits so curve fills inset tightly
-                axins.set_xlim(X_LOWER, X_UPPER)
-                y_min, y_max = g_inset.min(), g_inset.max()
-                x_min, x_max = r_inset.min(), r_inset.max()
-                axins.set_ylim(y_min*0.98, y_max*1.02)
+            if rdf_oxygen_mode == "pooled":
+                for r_val, g_val_raw, g_val_scaled in zip(r, g_raw, g_plot):
+                    curve_rows.append(
+                        {
+                            "phosphate": label,
+                            "curve_type": "pooled",
+                            "oxygen_name": "ALL",
+                            "r_nm": float(r_val),
+                            "g_raw": float(g_val_raw),
+                            "g_plot": float(g_val_scaled),
+                            "rdf_norm": rdf_norm,
+                            "rdf_scale": rdf_scale,
+                            "scale_factor": scale_factor,
+                            "rdf_oxygen_mode": rdf_oxygen_mode,
+                            "ion_name": ion_name.upper(),
+                        }
+                    )
 
-                # --- show only the top (maximum) y tick -----------------------
-                axins.set_yticks([y_max])                 # one tick at ymax
-                axins.set_yticklabels([f"{y_max:.0f}"], fontsize=18)   # optional: format label
-                axins.tick_params(axis="y",               # keep the tick mark
-                                which="both",
-                                direction="out",
-                                left=False,
-                                right=False,
-                                labelright=False)
-                if ax is not axes[0]:
-                    axins.tick_params(axis="x",               # hide x ticks/labels
-                                    bottom=False,
-                                    labelbottom=False)
-                else:
-                    axins.set_xticks([x_min, x_max])                 # one tick at ymax
-                    axins.set_xticklabels([f"{x_min:.2f}", f"{x_max:.2f}"], fontsize=18)   # optional: format label
-                    axins.tick_params(axis="x",               # show x ticks/labels
-                                    top=False,
-                                    labeltop=True,
-                                    bottom=False,
-                                    labelbottom=False)
+            summary_rows.append(
+                {
+                    "phosphate": label,
+                    "curve_type": "pooled",
+                    "oxygen_name": "ALL",
+                    "oxygen_names": ",".join(PHOS_OXYGENS[label]),
+                    "oxygen_indices": ",".join(map(str, oxy_ag.indices.tolist())),
+                    "oxygen_ids": ",".join(map(str, oxy_ag.ids.tolist())),
+                    "rdf_norm": rdf_norm,
+                    "rdf_scale": rdf_scale,
+                    "scale_factor": scale_factor,
+                    "rdf_oxygen_mode": rdf_oxygen_mode,
+                    "r_peak_raw_nm": float(r[np.argmax(g_raw)]),
+                    "g_peak_raw": float(np.max(g_raw)),
+                    "r_peak_plot_nm": float(r[np.argmax(g_plot)]),
+                    "g_peak_plot": float(np.max(g_plot)),
+                    "first_shell_end_nm": float(shell_end) if have_shell_end else float("nan"),
+                    "integration_cutoff_nm": float(cutoff_nm),
+                    "coordination_number_integrated": coord_num,
+                    "ion_density_nm3": float(ion_density_nm3) if ion_density_nm3 is not None else float("nan"),
+                    "mean_box_volume_nm3": float(mean_volume_nm3),
+                    "n_ions": int(len(na_ag)),
+                    "n_oxygen_sites": n_ox,
+                }
+            )
 
-            #ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))  # scientific notation for large y-values
-
-        # ---- common labels & title -----------------------------------------
         axes[-1].set_xlabel("r / nm", fontsize=18)
         fig.suptitle(binary_code, fontsize=26)
-
         plt.tight_layout()
         fig.subplots_adjust(hspace=0.1)
         fig.savefig(out_png, dpi=300)
         plt.close(fig)
         logging.info("RDF figure written to %s", out_png)
+
         if shell_ends_nm:
             mean_nm = float(np.mean(shell_ends_nm))
             std_nm = float(np.std(shell_ends_nm, ddof=1)) if len(shell_ends_nm) > 1 else 0.0
@@ -599,6 +788,62 @@ def plot_rdf_periphO_Na(
                 mean_nm,
                 std_nm,
             )
+
+        if rdf_curve_csv is not None:
+            rdf_curve_csv.parent.mkdir(parents=True, exist_ok=True)
+            with rdf_curve_csv.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "phosphate",
+                        "curve_type",
+                        "oxygen_name",
+                        "r_nm",
+                        "g_raw",
+                        "g_plot",
+                        "rdf_norm",
+                        "rdf_scale",
+                        "scale_factor",
+                        "rdf_oxygen_mode",
+                        "ion_name",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(curve_rows)
+            logging.info("RDF curve data written to %s", rdf_curve_csv)
+
+        if rdf_summary_csv is not None:
+            rdf_summary_csv.parent.mkdir(parents=True, exist_ok=True)
+            with rdf_summary_csv.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "phosphate",
+                        "curve_type",
+                        "oxygen_name",
+                        "oxygen_names",
+                        "oxygen_indices",
+                        "oxygen_ids",
+                        "rdf_norm",
+                        "rdf_scale",
+                        "scale_factor",
+                        "rdf_oxygen_mode",
+                        "r_peak_raw_nm",
+                        "g_peak_raw",
+                        "r_peak_plot_nm",
+                        "g_peak_plot",
+                        "first_shell_end_nm",
+                        "integration_cutoff_nm",
+                        "coordination_number_integrated",
+                        "ion_density_nm3",
+                        "mean_box_volume_nm3",
+                        "n_ions",
+                        "n_oxygen_sites",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(summary_rows)
+            logging.info("RDF summary written to %s", rdf_summary_csv)
 
 
 # ┃    2-D PROJECTION  PERPENDICULAR  TO  A  REFERENCE PLANE      ┃

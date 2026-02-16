@@ -21,9 +21,12 @@ CLI usage:
     python -m electrofit_analysis.cli.coordination.Na_IP6_coordination \
             --project /path/to/project [--subdir process] [--determine-global-y] \
             [--rdf-y-max 1800] [--plot-projection] [--ion-name K] \
-            [--rdf-show-first-shell] [--rdf-cutoff-mode {fixed,first-shell}]
+            [--rdf-norm {rdf,density,none}] \
+            [--rdf-show-first-shell] [--rdf-cutoff-mode {fixed,first-shell}] \
+            [--rdf-scale {raw,per-phosphate}] \
+            [--rdf-oxygen-mode {pooled,per-oxygen,both}]
 
-Outputs are written per microstate into analyze_final_sim/NaP_coordination/.
+Outputs are written per microstate into analyze_final_sim/IonP_coordination/.
 
 Date  : 2025-07-30
 """
@@ -33,7 +36,7 @@ import json
 import os
 import logging
 import pathlib
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Literal
 
 import numpy as np
 import MDAnalysis as mda
@@ -64,13 +67,39 @@ sns.set_context("talk")
 # ╚═══════════════════════════════════════════════════════════════╝
 
 PROCESS_DIR_NAME   = "process"
-PLOT_NAME_TEMPLATE = "NaP_coordination_counts.png"
+PLOT_NAME_TEMPLATE = "IonP_coordination_counts.png"
 
 RCUTOFF_NM         = 0.32       # coordination threshold  (change if desired)
 SAVE_3D_BOOL       = True       # turn off if disk space is an issue
-BOOL_FILENAME      = "NaP_coordination_bool.npy"   # legacy nearest-phosphate tensor (stored as numpy.memmap)
+BOOL_FILENAME      = "IonP_coordination_bool.npy"   # legacy nearest-phosphate tensor (stored as numpy.memmap)
 NEAREST_BOOL_ALIAS = "IonP_nearest_bool.npy"       # generic alias name for BOOL_FILENAME
 CONTACTS_FILENAME  = "IonP_contacts_bool.npy"      # non-exclusive contacts tensor (stored as numpy.memmap)
+RDF_CURVES_CSV     = "rdf_periphO_curves.csv"      # plotted RDF data points
+RDF_SUMMARY_CSV    = "rdf_periphO_summary.csv"     # per-phosphate RDF/CN summary
+RDF_CURVES_OXY_CSV = "rdf_periphO_curves_per_oxygen.csv"
+RDF_SUMMARY_OXY_CSV = "rdf_periphO_summary_per_oxygen.csv"
+
+
+def _rdf_scale_factor(rdf_scale: Literal["raw", "per-phosphate"], n_oxygen_sites: int = 3) -> float:
+    if rdf_scale == "raw":
+        return 1.0
+    if rdf_scale == "per-phosphate":
+        return float(n_oxygen_sites)
+    raise ValueError(f"Unsupported rdf_scale '{rdf_scale}'")
+
+
+def _rdf_scale_description(rdf_scale: Literal["raw", "per-phosphate"]) -> str:
+    return "raw (per oxygen)" if rdf_scale == "raw" else "per-phosphate (raw × 3)"
+
+
+def _rdf_plot_modes(rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"]) -> tuple[str, ...]:
+    if rdf_oxygen_mode == "pooled":
+        return ("pooled",)
+    if rdf_oxygen_mode == "per-oxygen":
+        return ("per-oxygen",)
+    if rdf_oxygen_mode == "both":
+        return ("pooled", "per-oxygen")
+    raise ValueError(f"Unsupported rdf_oxygen_mode '{rdf_oxygen_mode}'")
 
 
 def _link_or_copy_bool_tensor(src: pathlib.Path, dst: pathlib.Path) -> None:
@@ -123,6 +152,9 @@ def analyse_one_microstate(
         rdf_show_first_shell: bool = False,
         rdf_cutoff_mode: str = "fixed",
         coord_cutoff_source: str | None = None,
+        rdf_norm: Literal["rdf", "density", "none"] = "rdf",
+        rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
+        rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"] = "pooled",
         ion_name: str = "NA",
         ion_label: str | None = None,
 ) -> None:
@@ -143,9 +175,9 @@ def analyse_one_microstate(
         logging.warning("No %s atoms found – skipped.", ion_label)
         return
     logging.info("Loaded %d %s atoms and %d frames", n_na, ion_label, len(u.trajectory))
-
-    print("Unique atom names in IP6:")
-    print(sorted(set(u.select_atoms("resname I*").names)))
+    logging.info("RDF normalization mode: %s", rdf_norm)
+    logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
+    logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
 
     phos_ag = {p: u.select_atoms("resname I* and name " + " ".join(names))
                for p, names in PHOS_OXYGENS.items()}
@@ -154,25 +186,51 @@ def analyse_one_microstate(
     for p, ag in phos_ag.items():
         if len(ag) != 3:
             raise ValueError(f"Expected 3 peripheral O atoms for {p}, got {len(ag)}")
+        logging.info(
+            "[RDF setup] %s: O names=%s | O indices=%s | O ids=%s",
+            p,
+            ",".join(PHOS_OXYGENS[p]),
+            ",".join(map(str, ag.indices.tolist())),
+            ",".join(map(str, ag.ids.tolist())),
+        )
 
     # ── RDF curves (used for plotting and RDF-derived cutoffs) ─────────────────
     r_max_nm = 1.2
     nbins = 240
+    mean_box_volume_nm3_from_rdf: float | None = None
     if precomputed_rdf is None:
         rdf_results: dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         for label, oxy_ag in phos_ag.items():
-            rdf = InterRDF(oxy_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins)
+            rdf = InterRDF(oxy_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
             rdf.run()
-            rdf_results[label] = (rdf.bins / 10.0, rdf.rdf)  # Å → nm
+            rdf_results[label] = (rdf.results.bins / 10.0, rdf.results.rdf)  # Å → nm
+            if mean_box_volume_nm3_from_rdf is None:
+                vol_cum = getattr(rdf, "volume_cum", None)
+                n_frames_rdf = getattr(rdf, "n_frames", None)
+                if vol_cum is not None and n_frames_rdf:
+                    mean_box_volume_nm3_from_rdf = float(vol_cum / n_frames_rdf) / 1000.0
+            logging.info(
+                "[RDF setup] Computing InterRDF for %s: n_O=%d vs n_%s=%d, range=[0, %.2f] nm, nbins=%d",
+                label,
+                len(oxy_ag),
+                ion_name.upper(),
+                len(na_atoms),
+                r_max_nm,
+                nbins,
+            )
         # InterRDF iterates over the trajectory; reset before the explicit loop.
         u.trajectory[0]
     else:
         rdf_results = precomputed_rdf
 
+    rdf_scale_factor = _rdf_scale_factor(rdf_scale)
     shell_ends: list[float] = []
     for label in PHOS_LABELS:
         r_vals, g_raw = rdf_results[label]
-        shell_end = first_shell_end(np.asarray(r_vals, dtype=float), np.asarray(g_raw, dtype=float) * 3.0)
+        shell_end = first_shell_end(
+            np.asarray(r_vals, dtype=float),
+            np.asarray(g_raw, dtype=float) * rdf_scale_factor,
+        )
         if np.isfinite(shell_end):
             shell_ends.append(float(shell_end))
     shell_mean = float(np.mean(shell_ends)) if shell_ends else float("nan")
@@ -231,10 +289,14 @@ def analyse_one_microstate(
 
     # ── Frame-by-frame loop (vectorised in C under the hood) ──
     counts_ts = np.zeros((n_phos, n_frames), dtype=np.int16)  # for final plot
+    volume_sum_nm3 = 0.0
+    volume_samples = 0
 
     for k, ts in enumerate(u.trajectory):
         na_pos = na_atoms.positions               # (N_Na, 3)
         min_dists = np.full((n_na, n_phos), np.inf, dtype=np.float32)
+        volume_sum_nm3 += float(np.prod(ts.dimensions[:3]) / 1000.0)  # Å^3 -> nm^3
+        volume_samples += 1
 
         # Compute per-phosphate minimum distances Naᵢ ↔ O_peripheral
         for j, p in enumerate(PHOS_LABELS):
@@ -258,6 +320,22 @@ def analyse_one_microstate(
         # Aggregate counts per phosphate for this frame
         for j in range(n_phos):
             counts_ts[j, k] = np.count_nonzero(coordin_mask & (closest_phos_idx == j))
+
+    mean_box_volume_nm3 = (
+        volume_sum_nm3 / volume_samples if volume_samples > 0 else mean_box_volume_nm3_from_rdf
+    )
+    if mean_box_volume_nm3 is None and mean_box_volume_nm3_from_rdf is not None:
+        mean_box_volume_nm3 = mean_box_volume_nm3_from_rdf
+    ion_density_nm3 = (
+        float(n_na / mean_box_volume_nm3) if mean_box_volume_nm3 and mean_box_volume_nm3 > 0 else None
+    )
+    logging.info(
+        "[RDF setup] mean_box_volume=%.3f nm^3, n_%s=%d, ion_density=%.6f nm^-3",
+        float(mean_box_volume_nm3) if mean_box_volume_nm3 is not None else float("nan"),
+        ion_name.upper(),
+        n_na,
+        float(ion_density_nm3) if ion_density_nm3 is not None else float("nan"),
+    )
 
     # Flush memmap to disk
     if SAVE_3D_BOOL:
@@ -300,7 +378,7 @@ def analyse_one_microstate(
         logging.exception("Failed to compute coordination boxplot statistics.")
 
     if produce_boxplot:
-        boxplot_path = dest_dir / "NaP_coordination_boxplot.pdf"
+        boxplot_path = dest_dir / "IonP_coordination_boxplot.pdf"
         plot_coordination_boxplot(
             counts_ts=counts_ts,
             out_png=boxplot_path,
@@ -320,35 +398,36 @@ def analyse_one_microstate(
             ion_name=ion_name, ion_label=ion_label,
         )
 
-    rdf_png = dest_dir / "rdf_Na_periphO.pdf"
-    # global y max evaluated once (see outcommentd code below in main function)
-    if rdf_y_max_global is not None:
+    y_for_plot = rdf_y_max_global if rdf_y_max_global is not None else 1800.0
+    for mode in _rdf_plot_modes(rdf_oxygen_mode):
+        if mode == "pooled":
+            rdf_png = dest_dir / f"rdf_{ion_name.upper()}_periphO.pdf"
+            rdf_curve_csv = dest_dir / RDF_CURVES_CSV
+            rdf_summary_csv = dest_dir / RDF_SUMMARY_CSV
+        else:
+            rdf_png = dest_dir / f"rdf_{ion_name.upper()}_periphO_per_oxygen.pdf"
+            rdf_curve_csv = dest_dir / RDF_CURVES_OXY_CSV
+            rdf_summary_csv = dest_dir / RDF_SUMMARY_OXY_CSV
+
         plot_rdf_periphO_Na(
             u,
             out_png=rdf_png,
             r_max=1.2,
             nbins=240,
-            y_max_global=rdf_y_max_global,
+            y_max_global=y_for_plot,
             show_shell_cutoff=rdf_show_first_shell,
             cutoff_mode=rdf_cutoff_mode,
             r_cut_nm=r_cut_nm,
             rdf_results_override=rdf_results,
+            rdf_norm=rdf_norm,
+            rdf_scale=rdf_scale,
+            rdf_oxygen_mode=mode,
             ion_name=ion_name,
             ion_label=ion_label,
-        )
-    else:
-        plot_rdf_periphO_Na(
-            u,
-            out_png=rdf_png,
-            r_max=1.2,
-            nbins=240,
-            y_max_global=1800.0,
-            show_shell_cutoff=rdf_show_first_shell,
-            cutoff_mode=rdf_cutoff_mode,
-            r_cut_nm=r_cut_nm,
-            rdf_results_override=rdf_results,
-            ion_name=ion_name,
-            ion_label=ion_label,
+            ion_density_nm3=ion_density_nm3,
+            mean_volume_nm3=mean_box_volume_nm3,
+            rdf_curve_csv=rdf_curve_csv,
+            rdf_summary_csv=rdf_summary_csv,
         )
 
     logging.info("Finished %s", dest_dir.parent.name)
@@ -368,6 +447,9 @@ def main(
     rep: int | None = None,
     boxplot: bool = True,
     ion_name: str = "NA",
+    rdf_norm: Literal["rdf", "density", "none"] = "rdf",
+    rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
+    rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"] = "pooled",
     rdf_show_first_shell: bool = False,
     rdf_cutoff_mode: str = "fixed",
     project_mode: str = "auto",
@@ -395,6 +477,20 @@ def main(
         ``--determine-global-y`` the cache is refreshed/created.
     ion_name : str
         Atom name of the cation to analyse (e.g. "NA", "K").
+    rdf_norm : {"rdf", "density", "none"}
+        InterRDF normalization mode:
+        - rdf: normalized radial distribution function g(r)
+        - density: single-particle density n(r)
+        - none: raw shell counts
+    rdf_scale : {"raw", "per-phosphate"}
+        RDF scaling used for plotting/integration:
+        - raw: use InterRDF output directly (per oxygen)
+        - per-phosphate: multiply raw RDF by 3 (sum over three peripheral O sites)
+    rdf_oxygen_mode : {"pooled", "per-oxygen", "both"}
+        RDF grouping mode for visualization:
+        - pooled: one curve per phosphate using all three peripheral oxygens
+        - per-oxygen: three curves per phosphate (one curve per terminal oxygen)
+        - both: produce both output variants
     rdf_show_first_shell : bool
         If True, draw a dotted guide at the first-shell end (RDF minimum after the first peak).
     rdf_cutoff_mode : str
@@ -412,7 +508,12 @@ def main(
     run_dir_name, analyze_base = resolve_stage(stage)
     only_norm = {normalize_micro_name(x) for x in only} if only else None
     ion_name = ion_name.upper()
+    rdf_norm = rdf_norm.lower()
     ion_label = f"{ion_name}⁺"
+    scale_factor = _rdf_scale_factor(rdf_scale)
+    logging.info("RDF normalization mode: %s", rdf_norm)
+    logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
+    logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
 
     base_path = pathlib.Path(project_dir).resolve()
 
@@ -471,7 +572,7 @@ def main(
                 if not traj.is_file() or not top.is_file():
                     continue
 
-                dest_dir = analyze_base_dir / "NaP_coordination"
+                dest_dir = analyze_base_dir / "IonP_coordination"
                 yield proj, microstate, traj, top, dest_dir
 
     rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
@@ -505,26 +606,59 @@ def main(
             Y_GLOBAL_MAX = None
         else:
             cached_data = payload.get("data", {})
-            rdf_cache_arrays = {
-                micro: {
-                    label: (
-                        np.asarray(entry["r"], dtype=float),
-                        np.asarray(entry["g"], dtype=float),
-                    )
-                    for label, entry in micro_dict.items()
+            cached_norm = meta.get("rdf_norm")
+            if cached_norm and cached_norm != rdf_norm:
+                logging.warning(
+                    "RDF cache norm was '%s' but current run uses '%s'. Ignoring cache.",
+                    cached_norm,
+                    rdf_norm,
+                )
+                rdf_cache_arrays = None
+                Y_GLOBAL_MAX = None
+                cached_data = {}
+            cached_scale = meta.get("rdf_scale")
+            if cached_data and cached_scale and cached_scale != rdf_scale:
+                logging.info(
+                    "RDF cache scale was '%s' but current run uses '%s'; raw curves are reused and y-limit is re-derived.",
+                    cached_scale,
+                    rdf_scale,
+                )
+            if cached_data:
+                rdf_cache_arrays = {
+                    micro: {
+                        label: (
+                            np.asarray(entry["r"], dtype=float),
+                            np.asarray(entry["g"], dtype=float),
+                        )
+                        for label, entry in micro_dict.items()
+                    }
+                    for micro, micro_dict in cached_data.items()
                 }
-                for micro, micro_dict in cached_data.items()
-            }
             cached_cutoff = meta.get("coord_cutoff_nm_global")
-            if cached_cutoff is not None:
+            if cached_data and cached_cutoff is not None:
                 try:
                     global_cutoff_nm = float(cached_cutoff)
                 except Exception:
                     global_cutoff_nm = None
-            msg = f"Loaded RDF cache from {rdf_cache_path} (global y-limit = {Y_GLOBAL_MAX if Y_GLOBAL_MAX is not None else float('nan'):.2f})."
-            logging.info(msg)
-            print(msg)
+            if cached_data:
+                msg = f"Loaded RDF cache from {rdf_cache_path} (global y-limit = {Y_GLOBAL_MAX if Y_GLOBAL_MAX is not None else float('nan'):.2f})."
+                logging.info(msg)
+                print(msg)
             # Keep determine_global_y as-is: if the user explicitly requests a scan, refresh it.
+
+    if rdf_cache_arrays and rdf_y_max is None and (not determine_global_y):
+        peak_max = 0.0
+        for micro_dict in rdf_cache_arrays.values():
+            for label in PHOS_LABELS:
+                _, g_raw = micro_dict[label]
+                peak_max = max(peak_max, float(np.max(g_raw * scale_factor)))
+        if peak_max > 0.0:
+            Y_GLOBAL_MAX = peak_max * 1.05
+            logging.info(
+                "Global y-limit derived from cached RDFs with scale '%s': %.2f",
+                rdf_scale,
+                Y_GLOBAL_MAX,
+            )
 
     need_scan = False
     if determine_global_y and rdf_y_max is None:
@@ -548,7 +682,7 @@ def main(
         # -----------------------------------------------------------------------
         for proj, microstate, traj, top, dest_dir in iter_microstates():
             dest_dir.mkdir(exist_ok=True)
-            logfile = dest_dir / "NaP_coordination.log"
+            logfile = dest_dir / "IonP_coordination.log"
             setup_logging(logfile)
 
             u = mda.Universe(top, traj, topology_format="TPR")
@@ -560,19 +694,25 @@ def main(
             micro_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
             for label in PHOS_LABELS:
                 oxy_ag = u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-                rdf = InterRDF(oxy_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins)
+                rdf = InterRDF(oxy_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
                 rdf.run()
 
-                r_nm = rdf.bins / 10.0
-                g_raw = rdf.rdf
+                r_nm = rdf.results.bins / 10.0
+                g_raw = rdf.results.rdf
                 micro_cache[label] = (r_nm.copy(), g_raw.copy())
 
                 if determine_global_y and rdf_y_max is None and Y_GLOBAL_MAX is not None:
-                    peak_height = float((g_raw * 3).max())
+                    peak_height = float((g_raw * scale_factor).max())
+                    if rdf_oxygen_mode in {"per-oxygen", "both"}:
+                        for oxygen_index in oxy_ag.indices.tolist():
+                            oxygen_ag = u.atoms[[int(oxygen_index)]]
+                            rdf_single = InterRDF(oxygen_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
+                            rdf_single.run()
+                            peak_height = max(peak_height, float((rdf_single.results.rdf * scale_factor).max()))
                     Y_GLOBAL_MAX = max(Y_GLOBAL_MAX, peak_height)
 
                 if coord_cutoff_nm_global and coord_cutoff_nm is None and global_cutoff_nm is None:
-                    shell_end = first_shell_end(r_nm, g_raw * 3.0)
+                    shell_end = first_shell_end(r_nm, g_raw * scale_factor)
                     if np.isfinite(shell_end):
                         shell_ends_global.append(float(shell_end))
 
@@ -609,6 +749,9 @@ def main(
                     "nbins": nbins,
                     "global_y": Y_GLOBAL_MAX,
                     "ion_name": ion_name,
+                    "rdf_norm": rdf_norm,
+                    "rdf_scale": rdf_scale,
+                    "rdf_oxygen_mode": rdf_oxygen_mode,
                     "project_mode": project_mode,
                     "subdir": subdir,
                     "stage": stage,
@@ -641,7 +784,7 @@ def main(
 
     for proj, microstate, traj, top, dest_dir in iter_microstates():
         dest_dir.mkdir(exist_ok=True)
-        logfile = dest_dir / "NaP_coordination.log"
+        logfile = dest_dir / "IonP_coordination.log"
         setup_logging(logfile)
 
         effective_y_max = rdf_y_max if rdf_y_max is not None else Y_GLOBAL_MAX
@@ -674,6 +817,9 @@ def main(
             rdf_show_first_shell = rdf_show_first_shell or (rdf_cutoff_mode == "first-shell"),
             rdf_cutoff_mode = rdf_cutoff_mode,
             coord_cutoff_source = coord_cutoff_source,
+            rdf_norm = rdf_norm,
+            rdf_scale = rdf_scale,
+            rdf_oxygen_mode = rdf_oxygen_mode,
             ion_name = ion_name,
             ion_label = ion_label,
         )
@@ -724,7 +870,29 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ion-name",
         default="NA",
-        help="Atom name of the cation to analyze (e.g. NA, K).",
+        help="Atom name of the cation to analyze (e.g. NA, K, MG, CA).",
+    )
+    parser.add_argument(
+        "--rdf-norm",
+        choices=["rdf", "density", "none"],
+        default="rdf",
+        help="InterRDF normalization mode: rdf (g(r), default), density (n(r)), or none (raw shell counts).",
+    )
+    parser.add_argument(
+        "--rdf-scale",
+        choices=["raw", "per-phosphate"],
+        default="per-phosphate",
+        help=(
+            "RDF scaling for plotting/integration: raw (per oxygen) or per-phosphate (raw×3)."
+        ),
+    )
+    parser.add_argument(
+        "--rdf-oxygen-mode",
+        choices=["pooled", "per-oxygen", "both"],
+        default="pooled",
+        help=(
+            "RDF oxygen grouping: pooled (default), per-oxygen (three curves per phosphate), or both."
+        ),
     )
     parser.add_argument(
         "--rdf-show-first-shell",
@@ -768,6 +936,9 @@ if __name__ == "__main__":
         rdf_data_path=args.rdf_data,
         boxplot=args.boxplot,
         ion_name=args.ion_name,
+        rdf_norm=args.rdf_norm,
+        rdf_scale=args.rdf_scale,
+        rdf_oxygen_mode=args.rdf_oxygen_mode,
         rdf_show_first_shell=args.rdf_show_first_shell,
         rdf_cutoff_mode=args.rdf_cutoff_mode,
         project_mode=args.project_mode,

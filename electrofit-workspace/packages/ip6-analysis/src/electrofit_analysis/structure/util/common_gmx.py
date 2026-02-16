@@ -67,6 +67,7 @@ def plot_all_distances_subplots(
     num_groups: int,
     plot_filename: str = "all_distances_subplots.pdf",
     suptitle: str | None = None,
+    ion_label: str = "Na+",
 ) -> None:
     """Plot many distance time series as a grid of subplots.
 
@@ -108,7 +109,7 @@ def plot_all_distances_subplots(
                 fontsize=12,
                 bbox=dict(facecolor="white", alpha=0, edgecolor="none"),
             )
-            ax.set_title(f"{group_label} - Na$^+$", fontsize=14)
+            ax.set_title(f"{group_label} - {ion_label}", fontsize=14)
             ax.set_xlabel("Time (ns)")
             if i % ncols == 1:
                 ax.set_ylabel("Distance (nm)")

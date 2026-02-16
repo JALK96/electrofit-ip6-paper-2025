@@ -25,7 +25,7 @@ from electrofit.io.files import (
     extract_charges_from_subdirectories,
 )
 
-from electrofit.viz.helpers import plot_charges_by_symmetry, plot_charges_by_atom
+from electrofit.viz.helpers import plot_charges_by_symmetry, plot_charges_by_atom, plot_charges_by_atom_sym
 from electrofit.viz.histograms import HistogramSpec, plot_atom_histograms
 from electrofit.infra.step_logging import log_relevant_config
 from electrofit.infra.decisions import build_aggregation_decision

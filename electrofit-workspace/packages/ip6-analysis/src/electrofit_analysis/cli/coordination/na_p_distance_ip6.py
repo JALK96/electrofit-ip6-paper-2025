@@ -60,8 +60,8 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
 
             # Check if run dir exists
             if os.path.isdir(run_sim_dir):
-                # Define destination dir: analyze_*_sim[/rep_i]/NaP_dist_count
-                dest_dir = os.path.join(analyze_base_dir, "NaP_dist_count")
+                # Define destination dir: analyze_*_sim[/rep_i]/IonP_dist_count
+                dest_dir = os.path.join(analyze_base_dir, "IonP_dist_count")
                 os.makedirs(dest_dir, exist_ok=True)
                 os.chdir(dest_dir)
 
@@ -78,9 +78,9 @@ def main(project_dir: str, stage: str = 'final', only=None, rep: int | None = No
                 index_file = os.path.join(dest_dir, "NA_P_index.ndx")
                 selection_group = "NA"
                 output_prefix = (
-                    "distances_NaP"  # Generates distances_P1.xvg to distances_P6.xvg
+                    "distances_IonP"  # Generates distances_P1.xvg to distances_P6.xvg
                 )
-                log_file = "distances_NaP_gmx.log"
+                log_file = "distances_IonP_gmx.log"
 
                 # List of phosphorus groups
                 p_groups = ["P", "P1", "P2", "P3", "P4", "P5"]
