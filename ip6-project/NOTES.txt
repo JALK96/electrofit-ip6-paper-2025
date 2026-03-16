@@ -1,0 +1,2 @@
+This is the original parameterization diretory. We used 150 mM NaCl salt concentration. 
+For simulations with 150 mM Na+ ion concentration look into: /home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/projects/ip6-ion_conc_0p15_NaCl

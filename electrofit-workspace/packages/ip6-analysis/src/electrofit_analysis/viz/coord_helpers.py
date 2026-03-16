@@ -11,6 +11,7 @@ from MDAnalysis.analysis.rdf import InterRDF
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
+from matplotlib.lines import Line2D
 import re
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -164,6 +165,126 @@ def plot_coordination_boxplot(
     fig.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
     logging.info("Coordination boxplot written to %s", out_png)
+
+
+def plot_coordination_boxplot_multi_cutoff(
+        counts_by_cutoff: Dict[float, np.ndarray],
+        out_png: pathlib.Path,
+        *,
+        showfliers: bool = True,
+        binary_code: Optional[str] = None,
+        ylabel: str = "Na⁺ count",
+        ion_label: str = "Na⁺",
+) -> None:
+    """
+    Grouped boxplot of ion coordination counts per phosphate across cutoffs.
+
+    - One x-position per phosphate (P1..P6).
+    - One box per cutoff at each phosphate (side-by-side, narrower width).
+    - Color encodes protonation state (blue=protonated, gray=deprotonated).
+    - Opacity encodes cutoff identity (also shown in legend).
+    """
+    if not counts_by_cutoff:
+        raise ValueError("counts_by_cutoff must not be empty")
+
+    ordered_cutoffs = list(counts_by_cutoff.keys())
+    for cutoff in ordered_cutoffs:
+        arr = counts_by_cutoff[cutoff]
+        if arr.ndim != 2 or arr.shape[0] != len(PHOS_LABELS):
+            raise ValueError("Each counts_ts entry must have shape (6, n_frames)")
+
+    # infer binary code from output path if not provided explicitly
+    if binary_code is None:
+        try:
+            parent_name = out_png.parents[2].name  # e.g. IP_101101 or IP_101101_100
+            match = re.search(r"[01]{6}", parent_name)
+            binary_code = match.group(0) if match else "000000"
+        except Exception:
+            binary_code = "000000"
+    if len(binary_code) != 6 or any(c not in "01" for c in binary_code):
+        raise ValueError(f"Unexpected binary code '{binary_code}' in output path")
+    protonated = [bit == "1" for bit in binary_code]
+
+    # Global y-limits from all cutoff datasets
+    ymins: list[float] = []
+    ymaxs: list[float] = []
+    for cutoff in ordered_cutoffs:
+        metrics = coordination_boxplot_metrics(counts_by_cutoff[cutoff])
+        ymins.append(float(metrics["ymin"]))
+        ymaxs.append(float(metrics["ymax"]))
+    ymin = min(ymins) if ymins else 0.0
+    ymax = max(ymaxs) if ymaxs else 1.0
+
+    n_cut = len(ordered_cutoffs)
+    # Keep grouped boxes readable as number of cutoffs grows.
+    if n_cut == 1:
+        box_width = 0.6
+    else:
+        box_width = min(0.55 / n_cut, 0.22)
+    offsets = np.linspace(-(n_cut - 1) / 2.0, (n_cut - 1) / 2.0, n_cut) * (box_width * 1.45)
+    alphas = np.linspace(0.35, 0.85, n_cut)
+
+    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    legend_handles = []
+    legend_labels = []
+
+    for cutoff_idx, cutoff in enumerate(ordered_cutoffs):
+        counts_ts = counts_by_cutoff[cutoff]
+        per_phos = [np.asarray(counts_ts[i], dtype=float) for i in range(len(PHOS_LABELS))]
+        positions = [idx + 1 + offsets[cutoff_idx] for idx in range(len(PHOS_LABELS))]
+        bp = ax.boxplot(
+            per_phos,
+            positions=positions,
+            widths=box_width,
+            showfliers=showfliers,
+            patch_artist=True,
+            medianprops={"visible": False},
+            showmeans=True,
+            meanprops={
+                "marker": "D",
+                "markeredgecolor": "black",
+                "markerfacecolor": "black",
+                "markersize": 4.5,
+            },
+        )
+        for phos_idx, box in enumerate(bp["boxes"]):
+            base_color = "blue" if protonated[phos_idx] else "gray"
+            box.set_edgecolor("black")
+            box.set_facecolor(to_rgba(base_color, alpha=float(alphas[cutoff_idx])))
+        for element in ("whiskers", "caps"):
+            for obj in bp[element]:
+                obj.set_color("black")
+
+        # Legend key per cutoff (blue with matching alpha).
+        legend_handles.append(Line2D([0], [0], marker="s", linestyle="", markersize=9,
+                                     markerfacecolor=to_rgba("blue", alpha=float(alphas[cutoff_idx])),
+                                     markeredgecolor="black"))
+        legend_labels.append(f"{cutoff:.4f} nm")
+
+    ax.set_xticks(range(1, 7))
+    ax.set_xticklabels(PHOS_LABELS_CORRECTED, fontsize=12)
+    ax.set_ylabel(ylabel.replace("Na⁺", ion_label), fontsize=12)
+    ax.set_ylim(ymin, ymax)
+    ax.tick_params(axis="y", labelsize=12)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_title(binary_code, fontsize=14)
+    ax.text(
+        0.995,
+        0.985,
+        "Blue: protonated, Gray: deprotonated",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color="black",
+    )
+    ax.legend(legend_handles, legend_labels, title="Cutoff", loc="upper left", fontsize=9, title_fontsize=10)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    logging.info("Multi-cutoff coordination boxplot written to %s", out_png)
 
 
 def coordination_boxplot_metrics(counts_ts: np.ndarray) -> Dict[str, object]:
@@ -573,7 +694,7 @@ def plot_rdf_periphO_Na(
                 for oxygen_idx, (oxygen_name, oxygen_index, oxygen_id, r_single, g_raw_single) in enumerate(oxygen_rows):
                     r_single_arr = np.asarray(r_single, dtype=float)
                     g_raw_single_arr = np.asarray(g_raw_single, dtype=float)
-                    g_plot_single = g_raw_single_arr * scale_factor
+                    g_plot_single = g_raw_single_arr
                     local_y_peak = max(local_y_peak, float(np.max(g_plot_single)))
                     line_color = oxygen_colors[oxygen_idx]
                     oxygen_name_plot = _oxygen_label_one_based(oxygen_name)

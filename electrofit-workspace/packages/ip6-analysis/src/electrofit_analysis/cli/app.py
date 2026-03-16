@@ -27,6 +27,24 @@ import os
 from .common import parse_molecule_args
 
 
+def _parse_coord_cutoff_nm_arg(raw: str | None) -> float | list[float] | None:
+    """Parse --coord-cutoff-nm as one float or a comma-separated float list."""
+    if raw is None:
+        return None
+    parts = [piece.strip() for piece in str(raw).split(",") if piece.strip()]
+    if not parts:
+        return None
+    values: list[float] = []
+    for piece in parts:
+        try:
+            values.append(float(piece))
+        except ValueError as exc:
+            raise SystemExit(
+                f"Invalid --coord-cutoff-nm value '{piece}'. Use one float or comma-separated floats."
+            ) from exc
+    return values[0] if len(values) == 1 else values
+
+
 def _cmd_distance(args: argparse.Namespace) -> None:
     from .coordination.na_p_distance_ip6 import main as distance_main
 
@@ -115,6 +133,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
 
     project = os.path.abspath(args.project)
     only = parse_molecule_args(getattr(args, 'molecule', None))
+    coord_cutoff_nm = _parse_coord_cutoff_nm_arg(getattr(args, 'coord_cutoff_nm', None))
     coord_main(
         project_dir=project,
         subdir=args.subdir,
@@ -133,8 +152,10 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rdf_show_first_shell=getattr(args, 'rdf_show_first_shell', False),
         rdf_cutoff_mode=getattr(args, 'rdf_cutoff_mode', 'fixed'),
         project_mode=getattr(args, 'project_mode', 'auto'),
-        coord_cutoff_nm=getattr(args, 'coord_cutoff_nm', None),
+        coord_cutoff_nm=coord_cutoff_nm,
         coord_cutoff_nm_global=getattr(args, 'coord_cutoff_nm_global', False),
+        skip_rdf=getattr(args, 'skip_rdf', False),
+        overwrite=getattr(args, 'overwrite', False),
     )
 
 
@@ -357,6 +378,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  --rdf-oxygen-mode pooled  : one RDF per phosphate using all 3 terminal oxygens\n"
             "  --rdf-oxygen-mode per-oxygen : three RDF curves per phosphate (one per terminal oxygen)\n"
             "  --rdf-oxygen-mode both    : write both pooled and per-oxygen RDF outputs\n"
+            "\nOutput policy:\n"
+            "  - outputs are written with a cutoff suffix (e.g. *_0p3200nm.*)\n"
+            "  - existing files are backed up by default unless --overwrite is set\n"
         ),
     )
     p_coord.add_argument(
@@ -454,10 +478,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_coord.add_argument(
         "--coord-cutoff-nm",
-        type=float,
+        type=str,
         default=None,
         help=(
-            "Fixed cutoff in nm for the explicit coordination/count algorithm. "
+            "Fixed cutoff(s) in nm for the explicit coordination/count algorithm. "
+            "Provide one value (e.g. 0.32) or a comma list (e.g. 0.22,0.32). "
             "If omitted, the cutoff is estimated from the RDF first-shell end (per microstate by default)."
         ),
     )
@@ -470,9 +495,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_coord.add_argument(
+        "--skip-rdf",
+        action="store_true",
+        help=(
+            "Skip RDF calculations/plots for faster reruns. Requires --coord-cutoff-nm (fixed cutoff value(s))."
+        ),
+    )
+    p_coord.add_argument(
         "--ion-name",
         default="NA",
         help="Atom name of the cation to analyze (e.g. NA, K, MG, CA).",
+    )
+    p_coord.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite outputs in place. Default behavior is to back up existing files.",
     )
     p_coord.add_argument(
         "--no-boxplot",

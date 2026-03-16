@@ -36,7 +36,8 @@ import json
 import os
 import logging
 import pathlib
-from typing import Dict, Tuple, Literal
+from datetime import datetime
+from typing import Dict, Tuple, Literal, Sequence
 
 import numpy as np
 import MDAnalysis as mda
@@ -47,6 +48,7 @@ from electrofit.infra.logging import setup_logging
 from electrofit_analysis.viz.coord_helpers import (
     plot_counts_subplots, 
     plot_coordination_boxplot,
+    plot_coordination_boxplot_multi_cutoff,
     coordination_boxplot_metrics,
     plot_frame_network_3d_fixed_view, 
     plot_frame_network_plane, 
@@ -102,6 +104,53 @@ def _rdf_plot_modes(rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"]) ->
     raise ValueError(f"Unsupported rdf_oxygen_mode '{rdf_oxygen_mode}'")
 
 
+def _cutoff_tag(cutoff_nm: float) -> str:
+    """Return a filesystem-safe cutoff tag, e.g. 0.3200 -> '0p3200nm'."""
+    return f"{float(cutoff_nm):.4f}".replace(".", "p") + "nm"
+
+
+def _with_suffix(path: pathlib.Path, suffix: str) -> pathlib.Path:
+    """Insert suffix before extension: file.ext -> file_<suffix>.ext."""
+    return path.with_name(f"{path.stem}_{suffix}{path.suffix}")
+
+
+def _backup_existing_file(path: pathlib.Path, overwrite: bool) -> None:
+    """
+    Preserve existing outputs by default.
+    - overwrite=True  -> keep normal overwrite behavior.
+    - overwrite=False -> move existing file/symlink to timestamped backup.
+    """
+    if overwrite:
+        return
+    if path.exists() or path.is_symlink():
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup = path.with_name(f"{path.name}.bak.{timestamp}")
+        path.rename(backup)
+        logging.info("Backed up existing output: %s -> %s", path, backup)
+
+
+def _normalize_coord_cutoffs(cutoff_nm: float | Sequence[float] | None) -> list[float]:
+    """Normalize cutoff input to an ordered de-duplicated list of positive floats."""
+    if cutoff_nm is None:
+        return []
+    if isinstance(cutoff_nm, Sequence) and not isinstance(cutoff_nm, (str, bytes)):
+        raw_values = list(cutoff_nm)
+    else:
+        raw_values = [cutoff_nm]
+
+    values: list[float] = []
+    seen: set[float] = set()
+    for value in raw_values:
+        value_f = float(value)
+        if not np.isfinite(value_f) or value_f <= 0.0:
+            raise ValueError(f"Invalid coordination cutoff '{value}'; expected a positive finite number in nm.")
+        key = round(value_f, 8)
+        if key not in seen:
+            seen.add(key)
+            values.append(value_f)
+    return values
+
+
 def _link_or_copy_bool_tensor(src: pathlib.Path, dst: pathlib.Path) -> None:
     """Create dst as an alias of src (hardlink preferred, then symlink, then copy)."""
     if dst.exists() or dst.is_symlink():
@@ -144,7 +193,7 @@ def analyse_one_microstate(
         traj_file: pathlib.Path,
         top_file : pathlib.Path,
         dest_dir : pathlib.Path,
-        r_cut_nm: float | None = None,
+        r_cut_nm: float | Sequence[float] | None = None,
         rdf_y_max_global: float = None,
         plot_projection: bool = False,
         precomputed_rdf: dict[str, Tuple[np.ndarray, np.ndarray]] | None = None,
@@ -155,6 +204,8 @@ def analyse_one_microstate(
         rdf_norm: Literal["rdf", "density", "none"] = "rdf",
         rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
         rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"] = "pooled",
+        skip_rdf: bool = False,
+        overwrite: bool = False,
         ion_name: str = "NA",
         ion_label: str | None = None,
 ) -> None:
@@ -175,9 +226,12 @@ def analyse_one_microstate(
         logging.warning("No %s atoms found – skipped.", ion_label)
         return
     logging.info("Loaded %d %s atoms and %d frames", n_na, ion_label, len(u.trajectory))
-    logging.info("RDF normalization mode: %s", rdf_norm)
-    logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
-    logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
+    if skip_rdf:
+        logging.info("RDF analysis is skipped for this run.")
+    else:
+        logging.info("RDF normalization mode: %s", rdf_norm)
+        logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
+        logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
 
     phos_ag = {p: u.select_atoms("resname I* and name " + " ".join(names))
                for p, names in PHOS_OXYGENS.items()}
@@ -198,58 +252,72 @@ def analyse_one_microstate(
     r_max_nm = 1.2
     nbins = 240
     mean_box_volume_nm3_from_rdf: float | None = None
-    if precomputed_rdf is None:
-        rdf_results: dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-        for label, oxy_ag in phos_ag.items():
-            rdf = InterRDF(oxy_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
-            rdf.run()
-            rdf_results[label] = (rdf.results.bins / 10.0, rdf.results.rdf)  # Å → nm
-            if mean_box_volume_nm3_from_rdf is None:
-                vol_cum = getattr(rdf, "volume_cum", None)
-                n_frames_rdf = getattr(rdf, "n_frames", None)
-                if vol_cum is not None and n_frames_rdf:
-                    mean_box_volume_nm3_from_rdf = float(vol_cum / n_frames_rdf) / 1000.0
-            logging.info(
-                "[RDF setup] Computing InterRDF for %s: n_O=%d vs n_%s=%d, range=[0, %.2f] nm, nbins=%d",
-                label,
-                len(oxy_ag),
-                ion_name.upper(),
-                len(na_atoms),
-                r_max_nm,
-                nbins,
-            )
-        # InterRDF iterates over the trajectory; reset before the explicit loop.
-        u.trajectory[0]
-    else:
-        rdf_results = precomputed_rdf
-
-    rdf_scale_factor = _rdf_scale_factor(rdf_scale)
+    rdf_results: dict[str, Tuple[np.ndarray, np.ndarray]] | None = None
     shell_ends: list[float] = []
-    for label in PHOS_LABELS:
-        r_vals, g_raw = rdf_results[label]
-        shell_end = first_shell_end(
-            np.asarray(r_vals, dtype=float),
-            np.asarray(g_raw, dtype=float) * rdf_scale_factor,
-        )
-        if np.isfinite(shell_end):
-            shell_ends.append(float(shell_end))
-    shell_mean = float(np.mean(shell_ends)) if shell_ends else float("nan")
-    shell_std = float(np.std(shell_ends, ddof=1)) if len(shell_ends) > 1 else 0.0
+    shell_mean = float("nan")
+    shell_std = 0.0
+    if not skip_rdf:
+        if precomputed_rdf is None:
+            rdf_results = {}
+            for label, oxy_ag in phos_ag.items():
+                rdf = InterRDF(oxy_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
+                rdf.run()
+                rdf_results[label] = (rdf.results.bins / 10.0, rdf.results.rdf)  # Å → nm
+                if mean_box_volume_nm3_from_rdf is None:
+                    vol_cum = getattr(rdf, "volume_cum", None)
+                    n_frames_rdf = getattr(rdf, "n_frames", None)
+                    if vol_cum is not None and n_frames_rdf:
+                        mean_box_volume_nm3_from_rdf = float(vol_cum / n_frames_rdf) / 1000.0
+                logging.info(
+                    "[RDF setup] Computing InterRDF for %s: n_O=%d vs n_%s=%d, range=[0, %.2f] nm, nbins=%d",
+                    label,
+                    len(oxy_ag),
+                    ion_name.upper(),
+                    len(na_atoms),
+                    r_max_nm,
+                    nbins,
+                )
+            # InterRDF iterates over the trajectory; reset before the explicit loop.
+            u.trajectory[0]
+        else:
+            rdf_results = precomputed_rdf
+
+        rdf_scale_factor = _rdf_scale_factor(rdf_scale)
+        for label in PHOS_LABELS:
+            r_vals, g_raw = rdf_results[label]
+            shell_end = first_shell_end(
+                np.asarray(r_vals, dtype=float),
+                np.asarray(g_raw, dtype=float) * rdf_scale_factor,
+            )
+            if np.isfinite(shell_end):
+                shell_ends.append(float(shell_end))
+        shell_mean = float(np.mean(shell_ends)) if shell_ends else float("nan")
+        shell_std = float(np.std(shell_ends, ddof=1)) if len(shell_ends) > 1 else 0.0
 
     cutoff_source = coord_cutoff_source or "fixed (CLI)"
-    if r_cut_nm is None:
+    cutoffs_nm = _normalize_coord_cutoffs(r_cut_nm)
+    if not cutoffs_nm:
+        if skip_rdf:
+            raise ValueError("r_cut_nm must be provided when RDF is skipped.")
         cutoff_source = "RDF mean first-shell end (per microstate)"
         if shell_ends:
-            r_cut_nm = shell_mean
+            cutoffs_nm = [shell_mean]
         else:
             cutoff_source = "fallback fixed (no RDF minimum detected)"
-            r_cut_nm = RCUTOFF_NM
+            cutoffs_nm = [RCUTOFF_NM]
             logging.warning(
                 "Could not detect first-shell end; falling back to cutoff %.3f nm",
-                float(r_cut_nm),
+                float(cutoffs_nm[0]),
             )
+    elif len(cutoffs_nm) > 1 and cutoff_source == "fixed (CLI)":
+        cutoff_source = "fixed (CLI multi-cutoff)"
 
-    logging.info("Coordination cutoff used for counts: %.3f nm (%s)", float(r_cut_nm), cutoff_source)
+    cutoff_labels = {cutoff: _cutoff_tag(cutoff) for cutoff in cutoffs_nm}
+    logging.info(
+        "Coordination cutoff(s) used for counts: %s (%s)",
+        ", ".join(f"{cutoff:.4f} nm" for cutoff in cutoffs_nm),
+        cutoff_source,
+    )
     if shell_ends:
         logging.info(
             "First-shell end summary (n=%d): mean=%.3f nm, std=%.3f nm",
@@ -257,38 +325,56 @@ def analyse_one_microstate(
             shell_mean,
             shell_std,
         )
+    logging.info(
+        "Output cutoff tag(s): %s",
+        ", ".join(cutoff_labels[cutoff] for cutoff in cutoffs_nm),
+    )
 
     # ── Prepare Boolean memmap (optionally) ─────────────────
     n_frames   = len(u.trajectory)
     n_phos     = len(PHOS_LABELS)
     bool_shape = (n_na, n_phos, n_frames)          # (i, j, k)
-    coord_mem  = None
-    contacts_mem = None
+    coord_mem_by_cutoff: dict[float, np.ndarray] = {}
+    contacts_mem_by_cutoff: dict[float, np.ndarray] = {}
+    bool_path_by_cutoff: dict[float, pathlib.Path] = {}
+    alias_path_by_cutoff: dict[float, pathlib.Path] = {}
+    contacts_path_by_cutoff: dict[float, pathlib.Path] = {}
     if SAVE_3D_BOOL:
-        mmap_path = dest_dir / BOOL_FILENAME
-        contacts_path = dest_dir / CONTACTS_FILENAME
-        # open_memmap writes a valid .npy header; np.memmap does NOT
-        coord_mem = np.lib.format.open_memmap(
-            mmap_path, mode='w+', dtype=np.bool_, shape=bool_shape
-        )
-        coord_mem[:] = False      # initialise so file is fully allocated
-        coord_mem.flush()
-        logging.info(
-            "Nearest-phosphate tensor mapped to %s  (≈ %.1f MB).",
-            mmap_path, coord_mem.nbytes / 1e6
-        )
-        contacts_mem = np.lib.format.open_memmap(
-            contacts_path, mode="w+", dtype=np.bool_, shape=bool_shape
-        )
-        contacts_mem[:] = False
-        contacts_mem.flush()
-        logging.info(
-            "Contacts tensor mapped to %s  (≈ %.1f MB).",
-            contacts_path, contacts_mem.nbytes / 1e6
-        )
+        for cutoff in cutoffs_nm:
+            cutoff_label = cutoff_labels[cutoff]
+            bool_path = _with_suffix(dest_dir / BOOL_FILENAME, cutoff_label)
+            nearest_alias_path = _with_suffix(dest_dir / NEAREST_BOOL_ALIAS, cutoff_label)
+            contacts_path = _with_suffix(dest_dir / CONTACTS_FILENAME, cutoff_label)
+            bool_path_by_cutoff[cutoff] = bool_path
+            alias_path_by_cutoff[cutoff] = nearest_alias_path
+            contacts_path_by_cutoff[cutoff] = contacts_path
+            _backup_existing_file(bool_path, overwrite=overwrite)
+            _backup_existing_file(contacts_path, overwrite=overwrite)
+
+            coord_mem = np.lib.format.open_memmap(
+                bool_path, mode='w+', dtype=np.bool_, shape=bool_shape
+            )
+            coord_mem[:] = False
+            coord_mem.flush()
+            coord_mem_by_cutoff[cutoff] = coord_mem
+            logging.info(
+                "Nearest-phosphate tensor mapped to %s  (≈ %.1f MB).",
+                bool_path, coord_mem.nbytes / 1e6
+            )
+
+            contacts_mem = np.lib.format.open_memmap(
+                contacts_path, mode="w+", dtype=np.bool_, shape=bool_shape
+            )
+            contacts_mem[:] = False
+            contacts_mem.flush()
+            contacts_mem_by_cutoff[cutoff] = contacts_mem
+            logging.info(
+                "Contacts tensor mapped to %s  (≈ %.1f MB).",
+                contacts_path, contacts_mem.nbytes / 1e6
+            )
 
     # ── Frame-by-frame loop (vectorised in C under the hood) ──
-    counts_ts = np.zeros((n_phos, n_frames), dtype=np.int16)  # for final plot
+    counts_ts_by_cutoff = {cutoff: np.zeros((n_phos, n_frames), dtype=np.int16) for cutoff in cutoffs_nm}
     volume_sum_nm3 = 0.0
     volume_samples = 0
 
@@ -307,19 +393,17 @@ def analyse_one_microstate(
         closest_phos_idx = np.argmin(min_dists, axis=1)           # (N_Na,)
         closest_dist     = min_dists[np.arange(n_na), closest_phos_idx]
 
-        # Boolean mask: coordinated if distance < cutoff
-        coordin_mask = closest_dist < (r_cut_nm * 10)   # MDAnalysis uses Å
-        # Note: *10 converts nm → Å, because Universe positions are in Å.
+        for cutoff in cutoffs_nm:
+            threshold_a = cutoff * 10.0  # nm -> Å
+            coordin_mask = closest_dist < threshold_a
 
-        # Update Boolean tensor and counts
-        if SAVE_3D_BOOL:
-            coord_mem[np.arange(n_na), closest_phos_idx, k] = coordin_mask
-            # Non-exclusive contacts: any phosphate whose min(peripheral-O) distance is < cutoff
-            contacts_mem[:, :, k] = min_dists < (r_cut_nm * 10)
+            if SAVE_3D_BOOL:
+                coord_mem_by_cutoff[cutoff][np.arange(n_na), closest_phos_idx, k] = coordin_mask
+                contacts_mem_by_cutoff[cutoff][:, :, k] = min_dists < threshold_a
 
-        # Aggregate counts per phosphate for this frame
-        for j in range(n_phos):
-            counts_ts[j, k] = np.count_nonzero(coordin_mask & (closest_phos_idx == j))
+            counts_ts = counts_ts_by_cutoff[cutoff]
+            for j in range(n_phos):
+                counts_ts[j, k] = np.count_nonzero(coordin_mask & (closest_phos_idx == j))
 
     mean_box_volume_nm3 = (
         volume_sum_nm3 / volume_samples if volume_samples > 0 else mean_box_volume_nm3_from_rdf
@@ -339,96 +423,129 @@ def analyse_one_microstate(
 
     # Flush memmap to disk
     if SAVE_3D_BOOL:
-        coord_mem.flush()
-        contacts_mem.flush()
+        for cutoff in cutoffs_nm:
+            coord_mem_by_cutoff[cutoff].flush()
+            contacts_mem_by_cutoff[cutoff].flush()
+            bool_path = bool_path_by_cutoff[cutoff]
+            nearest_alias_path = alias_path_by_cutoff[cutoff]
+            try:
+                _backup_existing_file(nearest_alias_path, overwrite=overwrite)
+                _link_or_copy_bool_tensor(bool_path, nearest_alias_path)
+                logging.info("Wrote alias tensor name %s -> %s", nearest_alias_path.name, bool_path.name)
+            except Exception:
+                logging.exception("Failed to create alias %s for %s", nearest_alias_path, bool_path)
+
+    for cutoff in cutoffs_nm:
+        cutoff_label = cutoff_labels[cutoff]
+        counts_ts = counts_ts_by_cutoff[cutoff]
+        counts_png = _with_suffix(dest_dir / PLOT_NAME_TEMPLATE, cutoff_label)
+        _backup_existing_file(counts_png, overwrite=overwrite)
+        plot_counts_subplots(
+            counts_ts=counts_ts,
+            timestep_ps=u.trajectory.dt,
+            out_png=counts_png,
+            title=f"{ion_label} coordination counts – {dest_dir.parent.name}",
+            ion_label=ion_label,
+        )
+
         try:
-            _link_or_copy_bool_tensor(dest_dir / BOOL_FILENAME, dest_dir / NEAREST_BOOL_ALIAS)
-            logging.info("Wrote alias tensor name %s -> %s", NEAREST_BOOL_ALIAS, BOOL_FILENAME)
+            stats = coordination_boxplot_metrics(counts_ts)["per_phosphate"]
+            for label in PHOS_LABELS:
+                s = stats[label]
+                logging.info(
+                    "Coordination count stats [cutoff=%.4f nm] %s: mean=%.3f, std=%.3f, median=%.3f, q1=%.3f, q3=%.3f, whiskers=[%.3f, %.3f], outliers=%d",
+                    cutoff,
+                    label,
+                    s["mean"],
+                    s["std"],
+                    s["median"],
+                    s["q1"],
+                    s["q3"],
+                    s["whisker_low"],
+                    s["whisker_high"],
+                    s["n_outliers"],
+                )
         except Exception:
-            logging.exception("Failed to create alias %s for %s", NEAREST_BOOL_ALIAS, BOOL_FILENAME)
-
-    # ── Plot counts vs. time ─────────────────────────────────
-    plot_counts_subplots(
-        counts_ts=counts_ts,
-        timestep_ps=u.trajectory.dt,
-        out_png  = dest_dir / PLOT_NAME_TEMPLATE,
-        title    = f"{ion_label} coordination counts – {dest_dir.parent.name}",
-        ion_label=ion_label,
-    )
-
-    # Log the boxplot statistics derived from the cutoff-based coordination counts.
-    # (This is independent of RDF integration cutoffs.)
-    try:
-        stats = coordination_boxplot_metrics(counts_ts)["per_phosphate"]
-        for label in PHOS_LABELS:
-            s = stats[label]
-            logging.info(
-                "Coordination count stats %s: mean=%.3f, std=%.3f, median=%.3f, q1=%.3f, q3=%.3f, whiskers=[%.3f, %.3f], outliers=%d",
-                label,
-                s["mean"],
-                s["std"],
-                s["median"],
-                s["q1"],
-                s["q3"],
-                s["whisker_low"],
-                s["whisker_high"],
-                s["n_outliers"],
-            )
-    except Exception:
-        logging.exception("Failed to compute coordination boxplot statistics.")
+            logging.exception("Failed to compute coordination boxplot statistics for cutoff %.4f nm.", cutoff)
 
     if produce_boxplot:
-        boxplot_path = dest_dir / "IonP_coordination_boxplot.pdf"
-        plot_coordination_boxplot(
-            counts_ts=counts_ts,
-            out_png=boxplot_path,
-            showfliers=True,
-            ion_label=ion_label,
-            ylabel=f"{ion_label} count",
-        )
-    if plot_projection: 
-        snapshot_png = dest_dir / "network_frame_3d.png"
-        plot_frame_network_3d_fixed_view(
-            u, frame=521, out_png=snapshot_png, r_cut_nm=r_cut_nm, ion_name=ion_name, ion_label=ion_label
-        )
-        snapshot_png = dest_dir / "network_frame.png"
-        plot_frame_network_plane(
-            u, frame=525, out_png=snapshot_png,
-            reference_triplet=("C", "C2", "C4"), r_cut_nm=r_cut_nm,
-            ion_name=ion_name, ion_label=ion_label,
-        )
-
-    y_for_plot = rdf_y_max_global if rdf_y_max_global is not None else 1800.0
-    for mode in _rdf_plot_modes(rdf_oxygen_mode):
-        if mode == "pooled":
-            rdf_png = dest_dir / f"rdf_{ion_name.upper()}_periphO.pdf"
-            rdf_curve_csv = dest_dir / RDF_CURVES_CSV
-            rdf_summary_csv = dest_dir / RDF_SUMMARY_CSV
+        if len(cutoffs_nm) == 1:
+            cutoff = cutoffs_nm[0]
+            cutoff_label = cutoff_labels[cutoff]
+            boxplot_path = _with_suffix(dest_dir / "IonP_coordination_boxplot.pdf", cutoff_label)
+            _backup_existing_file(boxplot_path, overwrite=overwrite)
+            plot_coordination_boxplot(
+                counts_ts=counts_ts_by_cutoff[cutoff],
+                out_png=boxplot_path,
+                showfliers=True,
+                ion_label=ion_label,
+                ylabel=f"{ion_label} count",
+            )
         else:
-            rdf_png = dest_dir / f"rdf_{ion_name.upper()}_periphO_per_oxygen.pdf"
-            rdf_curve_csv = dest_dir / RDF_CURVES_OXY_CSV
-            rdf_summary_csv = dest_dir / RDF_SUMMARY_OXY_CSV
+            cutoff_combo_label = "-".join(cutoff_labels[cutoff] for cutoff in cutoffs_nm)
+            boxplot_path = dest_dir / f"IonP_coordination_boxplot_{cutoff_combo_label}.pdf"
+            _backup_existing_file(boxplot_path, overwrite=overwrite)
+            plot_coordination_boxplot_multi_cutoff(
+                counts_by_cutoff={cutoff: counts_ts_by_cutoff[cutoff] for cutoff in cutoffs_nm},
+                out_png=boxplot_path,
+                showfliers=True,
+                ion_label=ion_label,
+                ylabel=f"{ion_label} count",
+            )
 
-        plot_rdf_periphO_Na(
-            u,
-            out_png=rdf_png,
-            r_max=1.2,
-            nbins=240,
-            y_max_global=y_for_plot,
-            show_shell_cutoff=rdf_show_first_shell,
-            cutoff_mode=rdf_cutoff_mode,
-            r_cut_nm=r_cut_nm,
-            rdf_results_override=rdf_results,
-            rdf_norm=rdf_norm,
-            rdf_scale=rdf_scale,
-            rdf_oxygen_mode=mode,
-            ion_name=ion_name,
-            ion_label=ion_label,
-            ion_density_nm3=ion_density_nm3,
-            mean_volume_nm3=mean_box_volume_nm3,
-            rdf_curve_csv=rdf_curve_csv,
-            rdf_summary_csv=rdf_summary_csv,
-        )
+    if plot_projection:
+        for cutoff in cutoffs_nm:
+            cutoff_label = cutoff_labels[cutoff]
+            snapshot_png = _with_suffix(dest_dir / "network_frame_3d.png", cutoff_label)
+            _backup_existing_file(snapshot_png, overwrite=overwrite)
+            plot_frame_network_3d_fixed_view(
+                u, frame=521, out_png=snapshot_png, r_cut_nm=cutoff, ion_name=ion_name, ion_label=ion_label
+            )
+            snapshot_png = _with_suffix(dest_dir / "network_frame.png", cutoff_label)
+            _backup_existing_file(snapshot_png, overwrite=overwrite)
+            plot_frame_network_plane(
+                u, frame=525, out_png=snapshot_png,
+                reference_triplet=("C", "C2", "C4"), r_cut_nm=cutoff,
+                ion_name=ion_name, ion_label=ion_label,
+            )
+
+    if not skip_rdf:
+        y_for_plot = rdf_y_max_global if rdf_y_max_global is not None else 1800.0
+        for cutoff in cutoffs_nm:
+            cutoff_label = cutoff_labels[cutoff]
+            for mode in _rdf_plot_modes(rdf_oxygen_mode):
+                if mode == "pooled":
+                    rdf_png = _with_suffix(dest_dir / f"rdf_{ion_name.upper()}_periphO.pdf", cutoff_label)
+                    rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_CSV, cutoff_label)
+                    rdf_summary_csv = _with_suffix(dest_dir / RDF_SUMMARY_CSV, cutoff_label)
+                else:
+                    rdf_png = _with_suffix(dest_dir / f"rdf_{ion_name.upper()}_periphO_per_oxygen.pdf", cutoff_label)
+                    rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_OXY_CSV, cutoff_label)
+                    rdf_summary_csv = _with_suffix(dest_dir / RDF_SUMMARY_OXY_CSV, cutoff_label)
+
+                _backup_existing_file(rdf_png, overwrite=overwrite)
+                _backup_existing_file(rdf_curve_csv, overwrite=overwrite)
+                _backup_existing_file(rdf_summary_csv, overwrite=overwrite)
+                plot_rdf_periphO_Na(
+                    u,
+                    out_png=rdf_png,
+                    r_max=1.2,
+                    nbins=240,
+                    y_max_global=y_for_plot,
+                    show_shell_cutoff=rdf_show_first_shell,
+                    cutoff_mode=rdf_cutoff_mode,
+                    r_cut_nm=cutoff,
+                    rdf_results_override=rdf_results,
+                    rdf_norm=rdf_norm,
+                    rdf_scale=rdf_scale,
+                    rdf_oxygen_mode=mode,
+                    ion_name=ion_name,
+                    ion_label=ion_label,
+                    ion_density_nm3=ion_density_nm3,
+                    mean_volume_nm3=mean_box_volume_nm3,
+                    rdf_curve_csv=rdf_curve_csv,
+                    rdf_summary_csv=rdf_summary_csv,
+                )
 
     logging.info("Finished %s", dest_dir.parent.name)
 
@@ -453,8 +570,10 @@ def main(
     rdf_show_first_shell: bool = False,
     rdf_cutoff_mode: str = "fixed",
     project_mode: str = "auto",
-    coord_cutoff_nm: float | None = None,
+    coord_cutoff_nm: float | Sequence[float] | None = None,
     coord_cutoff_nm_global: bool = False,
+    skip_rdf: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """Run coordination analysis across micro-states.
 
@@ -498,12 +617,22 @@ def main(
     project_mode : str
         How to interpret project_dir: 'project' (single project), 'collection' (directory containing projects),
         or 'auto' (detect based on presence of a process directory).
-    coord_cutoff_nm : float | None
-        Fixed cutoff (nm) for the explicit coordination/count algorithm. When None (default),
-        the cutoff is derived from the RDF first-shell end (per microstate by default).
+    coord_cutoff_nm : float | Sequence[float] | None
+        Fixed cutoff(s) (nm) for the explicit coordination/count algorithm.
+        A sequence triggers multi-cutoff output generation.
+        When None (default), the cutoff is derived from the RDF first-shell end (per microstate by default).
     coord_cutoff_nm_global : bool
         If True, compute one RDF-derived cutoff across the scan scope (project or collection) and use it for
         all explicit coordination/count analyses.
+    skip_rdf : bool
+        If True, skip all RDF calculations/plots/caches. Requires coord_cutoff_nm.
+    overwrite : bool
+        If True, overwrite outputs directly. By default existing outputs are backed up.
+
+    Notes
+    -----
+    Most output files are written with a cutoff suffix
+    (for example ``*_0p3200nm.*``) so reruns with different cutoffs can coexist.
     """
     run_dir_name, analyze_base = resolve_stage(stage)
     only_norm = {normalize_micro_name(x) for x in only} if only else None
@@ -514,6 +643,28 @@ def main(
     logging.info("RDF normalization mode: %s", rdf_norm)
     logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
     logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
+    logging.info("Skip RDF: %s", skip_rdf)
+    logging.info("Overwrite outputs: %s", overwrite)
+
+    fixed_cutoffs = _normalize_coord_cutoffs(coord_cutoff_nm)
+
+    if skip_rdf:
+        if not fixed_cutoffs:
+            raise ValueError("--skip-rdf requires --coord-cutoff-nm (fixed cutoff).")
+        if determine_global_y:
+            logging.warning("--skip-rdf set: ignoring --determine-global-y.")
+            determine_global_y = False
+        if coord_cutoff_nm_global:
+            logging.warning("--skip-rdf set: ignoring --coord-cutoff-nm-global.")
+            coord_cutoff_nm_global = False
+        if rdf_data_path:
+            logging.warning("--skip-rdf set: ignoring --rdf-data cache path.")
+            rdf_data_path = None
+    if coord_cutoff_nm_global and fixed_cutoffs:
+        logging.warning(
+            "Both fixed cutoff(s) and --coord-cutoff-nm-global were provided; ignoring --coord-cutoff-nm-global."
+        )
+        coord_cutoff_nm_global = False
 
     base_path = pathlib.Path(project_dir).resolve()
 
@@ -533,7 +684,7 @@ def main(
 
     project_roots = detect_project_roots()
     logging.info("Coordination project roots (%s): %s", project_mode, ", ".join(str(p) for p in project_roots))
-    if coord_cutoff_nm_global and coord_cutoff_nm is None and only_norm is None:
+    if coord_cutoff_nm_global and not fixed_cutoffs and only_norm is None:
         logging.warning(
             "Global cutoff requested without -m/--molecule filter; this may mix different molecules under '%s'.",
             subdir,
@@ -578,7 +729,7 @@ def main(
     rdf_cache_arrays: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] | None = None
     rdf_cache_path = pathlib.Path(rdf_data_path).resolve() if rdf_data_path else None
 
-    if rdf_cache_path and not rdf_cache_path.exists() and not (determine_global_y and rdf_y_max is None):
+    if (not skip_rdf) and rdf_cache_path and not rdf_cache_path.exists() and not (determine_global_y and rdf_y_max is None):
         raise FileNotFoundError(f"RDF cache {rdf_cache_path} not found. Run with --determine-global-y to create it.")
 
     Y_GLOBAL_MAX: float | None = None
@@ -587,7 +738,7 @@ def main(
     # ---------------------------------------------------------------------------
     # Attempt to reuse a cache if provided
     # ---------------------------------------------------------------------------
-    if rdf_cache_path and rdf_cache_path.exists():
+    if (not skip_rdf) and rdf_cache_path and rdf_cache_path.exists():
         with rdf_cache_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         meta = payload.get("meta", {})
@@ -646,7 +797,7 @@ def main(
                 print(msg)
             # Keep determine_global_y as-is: if the user explicitly requests a scan, refresh it.
 
-    if rdf_cache_arrays and rdf_y_max is None and (not determine_global_y):
+    if (not skip_rdf) and rdf_cache_arrays and rdf_y_max is None and (not determine_global_y):
         peak_max = 0.0
         for micro_dict in rdf_cache_arrays.values():
             for label in PHOS_LABELS:
@@ -661,10 +812,11 @@ def main(
             )
 
     need_scan = False
-    if determine_global_y and rdf_y_max is None:
-        need_scan = True
-    if coord_cutoff_nm_global and coord_cutoff_nm is None and global_cutoff_nm is None:
-        need_scan = True
+    if not skip_rdf:
+        if determine_global_y and rdf_y_max is None:
+            need_scan = True
+        if coord_cutoff_nm_global and not fixed_cutoffs and global_cutoff_nm is None:
+            need_scan = True
 
     if need_scan:
         # -----------------------------------------------------------------------
@@ -683,6 +835,7 @@ def main(
         for proj, microstate, traj, top, dest_dir in iter_microstates():
             dest_dir.mkdir(exist_ok=True)
             logfile = dest_dir / "IonP_coordination.log"
+            _backup_existing_file(logfile, overwrite=overwrite)
             setup_logging(logfile)
 
             u = mda.Universe(top, traj, topology_format="TPR")
@@ -711,7 +864,7 @@ def main(
                             peak_height = max(peak_height, float((rdf_single.results.rdf * scale_factor).max()))
                     Y_GLOBAL_MAX = max(Y_GLOBAL_MAX, peak_height)
 
-                if coord_cutoff_nm_global and coord_cutoff_nm is None and global_cutoff_nm is None:
+                if coord_cutoff_nm_global and not fixed_cutoffs and global_cutoff_nm is None:
                     shell_end = first_shell_end(r_nm, g_raw * scale_factor)
                     if np.isfinite(shell_end):
                         shell_ends_global.append(float(shell_end))
@@ -728,7 +881,7 @@ def main(
                 logging.warning("No microstates processed during global y scan; using default y-limit.")
                 Y_GLOBAL_MAX = None
 
-        if coord_cutoff_nm_global and coord_cutoff_nm is None and global_cutoff_nm is None:
+        if coord_cutoff_nm_global and not fixed_cutoffs and global_cutoff_nm is None:
             if shell_ends_global:
                 global_cutoff_nm = float(np.mean(shell_ends_global))
                 std_nm = float(np.std(shell_ends_global, ddof=1)) if len(shell_ends_global) > 1 else 0.0
@@ -770,11 +923,12 @@ def main(
                 },
             }
             rdf_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            _backup_existing_file(rdf_cache_path, overwrite=overwrite)
             with rdf_cache_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
             logging.info("Saved RDF cache to %s", rdf_cache_path)
 
-    if Y_GLOBAL_MAX is None:
+    if (not skip_rdf) and Y_GLOBAL_MAX is None:
         if rdf_y_max is not None:
             Y_GLOBAL_MAX = rdf_y_max
             logging.info(f"Using user-provided RDF y-limit: {Y_GLOBAL_MAX:.2f}")
@@ -785,20 +939,21 @@ def main(
     for proj, microstate, traj, top, dest_dir in iter_microstates():
         dest_dir.mkdir(exist_ok=True)
         logfile = dest_dir / "IonP_coordination.log"
+        _backup_existing_file(logfile, overwrite=overwrite)
         setup_logging(logfile)
 
-        effective_y_max = rdf_y_max if rdf_y_max is not None else Y_GLOBAL_MAX
+        effective_y_max = None if skip_rdf else (rdf_y_max if rdf_y_max is not None else Y_GLOBAL_MAX)
         rdf_override = None
-        if rdf_cache_arrays:
+        if (not skip_rdf) and rdf_cache_arrays:
             key = micro_key(proj, microstate)
             if key in rdf_cache_arrays:
                 rdf_override = rdf_cache_arrays[key]
 
-        coord_cutoff_to_use: float | None
+        coord_cutoff_to_use: float | Sequence[float] | None
         coord_cutoff_source: str | None = None
-        if coord_cutoff_nm is not None:
-            coord_cutoff_to_use = float(coord_cutoff_nm)
-            coord_cutoff_source = "fixed (CLI)"
+        if fixed_cutoffs:
+            coord_cutoff_to_use = fixed_cutoffs
+            coord_cutoff_source = "fixed (CLI multi-cutoff)" if len(fixed_cutoffs) > 1 else "fixed (CLI)"
         elif coord_cutoff_nm_global and global_cutoff_nm is not None:
             coord_cutoff_to_use = float(global_cutoff_nm)
             coord_cutoff_source = "RDF mean first-shell end (global)"
@@ -820,6 +975,8 @@ def main(
             rdf_norm = rdf_norm,
             rdf_scale = rdf_scale,
             rdf_oxygen_mode = rdf_oxygen_mode,
+            skip_rdf = skip_rdf,
+            overwrite = overwrite,
             ion_name = ion_name,
             ion_label = ion_label,
         )
@@ -828,9 +985,26 @@ if __name__ == "__main__":
     import argparse
     import os
 
+    def _parse_coord_cutoff_nm_arg(raw: str | None) -> float | list[float] | None:
+        if raw is None:
+            return None
+        parts = [piece.strip() for piece in str(raw).split(",") if piece.strip()]
+        if not parts:
+            return None
+        values: list[float] = []
+        for piece in parts:
+            try:
+                values.append(float(piece))
+            except ValueError as exc:
+                raise SystemExit(
+                    f"Invalid --coord-cutoff-nm value '{piece}'. Use one float or comma-separated floats."
+                ) from exc
+        return values[0] if len(values) == 1 else values
+
     parser = argparse.ArgumentParser(
         description=(
-            "Analyze Na–IP6 coordination across microstates under a project directory."
+            "Analyze ion–IP6 coordination across microstates under a project directory. "
+            "Outputs are cutoff-suffixed (e.g. *_0p3200nm.*); existing files are backed up unless --overwrite."
         )
     )
     parser.add_argument("-p", "--project", required=True, help="Path to the project root directory.")
@@ -913,10 +1087,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--coord-cutoff-nm",
-        type=float,
+        type=str,
         default=None,
         help=(
-            "Fixed cutoff in nm for the explicit coordination/count algorithm. "
+            "Fixed cutoff(s) in nm for the explicit coordination/count algorithm. "
+            "Provide one value (e.g. 0.32) or a comma list (e.g. 0.22,0.32). "
             "If omitted, the cutoff is estimated from the RDF first-shell end."
         ),
     )
@@ -925,7 +1100,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Use one global RDF-derived cutoff across the scan scope (project or collection).",
     )
+    parser.add_argument(
+        "--skip-rdf",
+        action="store_true",
+        help="Skip RDF calculations/plots for faster reruns. Requires --coord-cutoff-nm value(s).",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite outputs in place (default is backup-before-write).",
+    )
     args = parser.parse_args()
+    coord_cutoff_nm = _parse_coord_cutoff_nm_arg(args.coord_cutoff_nm)
 
     main(
         project_dir=os.path.abspath(args.project),
@@ -942,6 +1128,8 @@ if __name__ == "__main__":
         rdf_show_first_shell=args.rdf_show_first_shell,
         rdf_cutoff_mode=args.rdf_cutoff_mode,
         project_mode=args.project_mode,
-        coord_cutoff_nm=args.coord_cutoff_nm,
+        coord_cutoff_nm=coord_cutoff_nm,
         coord_cutoff_nm_global=args.coord_cutoff_nm_global,
+        skip_rdf=args.skip_rdf,
+        overwrite=args.overwrite,
     )
