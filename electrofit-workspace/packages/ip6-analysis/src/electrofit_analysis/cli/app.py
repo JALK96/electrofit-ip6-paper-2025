@@ -200,7 +200,16 @@ def _cmd_pp_matrix(args: argparse.Namespace) -> None:
     project = os.path.abspath(args.project)
     only = parse_molecule_args(getattr(args, 'molecule', None))
     root = os.path.join(project, "process")
-    ppm_main(root, args.kind, args.mode, args.width_mode, args.width_ref, stage=getattr(args, 'stage', 'final'), only=only)
+    ppm_main(
+        root,
+        args.kind,
+        args.mode,
+        args.width_mode,
+        args.width_ref,
+        oxygen_mode=getattr(args, "oxygen_mode", "all"),
+        stage=getattr(args, 'stage', 'final'),
+        only=only,
+    )
 
 
 def _cmd_hbonds_compare(args: argparse.Namespace) -> None:
@@ -624,6 +633,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="How to aggregate O–O bonds into P→P fractions (default: union).",
     )
     p_ppm.add_argument(
+        "--oxygen-mode",
+        choices=["all", "terminal"],
+        default="all",
+        help=(
+            "Which phosphate oxygens to include: all (bridging + terminal) or "
+            "terminal (exclude bridging oxygens)."
+        ),
+    )
+    p_ppm.add_argument(
         "--width-mode",
         choices=["continuous", "coarse"],
         default="continuous",
@@ -632,7 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ppm.add_argument(
         "--width-ref",
         choices=["auto", "absolute"],
-        default="auto",
+        default="absolute",
         help="Scale relative to graph max (auto) or absolute fraction (absolute).",
     )
     p_ppm.set_defaults(func=_cmd_pp_matrix)

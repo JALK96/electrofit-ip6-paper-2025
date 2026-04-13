@@ -15,6 +15,13 @@ from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 from electrofit.cli.run_commands import run_command
 from electrofit.io.files import find_file_with_extension
+from electrofit_analysis.structure.util.hbond_io import (
+    analyze_hydrogen_bonds as _shared_analyze_hydrogen_bonds,
+    load_hb_num_xvg as _shared_load_hb_num_xvg,
+    parse_hbond_log_to_dataframe as _shared_parse_hbond_log_to_dataframe,
+    parse_xpm as _shared_parse_xpm,
+    refine_atom_name as _shared_refine_atom_name,
+)
 
 sns.set_context("talk")
 
@@ -29,21 +36,7 @@ def load_hb_num_xvg(filename):
     Returns:
         np.ndarray: 2D array with the data.
     """
-    data = []
-    with open(filename, "r") as file:
-        for line in file:
-            if line.startswith(("@", "#")):
-                continue  # Skip header lines
-            parts = line.strip().split()
-            if len(parts) >= 2:  # Ensure there are at least two columns
-                try:
-                    # Convert all parts to float
-                    floats = [float(part) for part in parts]
-                    data.append(floats)
-                except ValueError:
-                    # Skip lines that don't contain valid floats
-                    continue
-    return np.array(data)
+    return _shared_load_hb_num_xvg(filename)
 
 
 def refine_atom_name(atom):
@@ -58,19 +51,7 @@ def refine_atom_name(atom):
     Returns:
     - str: Refined atom name.
     """
-    # Match atoms like 'O' (no number)
-    if re.fullmatch(r"[A-Za-z]+", atom):
-        return atom + "1"
-
-    # Match atoms like 'O10', 'O2', etc.
-    match = re.fullmatch(r"([A-Za-z]+)(\d+)", atom)
-    if match:
-        name = match.group(1)
-        number = int(match.group(2)) + 1  # Increment the number by 1
-        return f"{name}{number}"
-
-    # If atom name doesn't match expected patterns, return as is
-    return atom
+    return _shared_refine_atom_name(atom)
 
 
 def parse_xpm(file_path):
@@ -84,76 +65,7 @@ def parse_xpm(file_path):
     - data_matrix: np.ndarray, binary matrix representing hydrogen bonds.
     - metadata: dict, contains title, labels, etc.
     """
-    with open(file_path, "r") as file:
-        lines = file.readlines()
-
-    # Initialize variables
-    metadata = {}
-    data_lines = []
-    color_map = {}
-    header_found = False
-    data_started = False
-
-    for line in lines:
-        line = line.strip()
-
-        # Extract metadata
-        if line.startswith("/*") and not data_started:
-            comment = line.strip("/* ").strip(" */")
-            if ":" in comment:
-                key, value = comment.split(":", 1)
-                metadata[key.strip().lower()] = value.strip().strip('"')
-            continue
-
-        # Identify the start of data
-        if line.startswith("static char"):
-            continue  # Skip the static declaration line
-
-        if line.startswith('"') and not header_found:
-            # Header line containing dimensions and color info
-            header = line.strip('",')
-            tokens = header.split()
-            if len(tokens) >= 4:
-                width = int(tokens[0])
-                height = int(tokens[1])
-                num_colors = int(tokens[2])
-                chars_per_pixel = int(tokens[3])
-                header_found = True
-            continue
-
-        if header_found and not data_started:
-            # Read color definitions
-            color_def = line.strip('",')
-            # Example: "   c #FFFFFF " or "o  c #FF0000 "
-            match = re.match(r"(.{%d})\s+c\s+(\S+)" % chars_per_pixel, color_def)
-            if match:
-                symbol = match.group(1)
-                color = match.group(2)
-                color_map[symbol] = color
-            if len(color_map) == num_colors:
-                data_started = True
-            continue
-
-        if data_started:
-            # Read data lines
-            if line.startswith('"'):
-                data_line = line.strip('",')
-                data_lines.append(data_line)
-
-    # Convert data lines to binary matrix
-    data_matrix = np.zeros((height, width), dtype=int)
-
-    for y, line in enumerate(data_lines):
-        for x, char in enumerate(line):
-            if char in color_map:
-                if color_map[char] == "#FF0000":  # Present bond
-                    data_matrix[y, x] = 1
-                else:
-                    data_matrix[y, x] = 0
-            else:
-                data_matrix[y, x] = 0  # Default to 0 if unknown
-
-    return data_matrix, metadata
+    return _shared_parse_xpm(file_path, align_rows_to_log=True)
 
 
 def analyze_hydrogen_bonds(data_matrix, metadata):
@@ -167,35 +79,7 @@ def analyze_hydrogen_bonds(data_matrix, metadata):
     Returns:
     - analysis_results: dict, contains various analysis metrics.
     """
-    analysis_results = {}
-
-    # Total number of hydrogen bonds over time
-    hbonds_over_time = np.sum(data_matrix, axis=0)
-
-    # Total occurrence of each hydrogen bond
-    hbonds_per_index = np.sum(data_matrix, axis=1)
-
-    # Lifetime distribution (how long each bond persists)
-    # This is more complex and would require tracking continuous sequences of 1s
-    lifetimes = []
-    for bond in data_matrix:
-        current_lifetime = 0
-        bond_lifetimes = []
-        for state in bond:
-            if state == 1:
-                current_lifetime += 1
-            else:
-                if current_lifetime > 0:
-                    bond_lifetimes.append(current_lifetime)
-                    current_lifetime = 0
-        if current_lifetime > 0:
-            bond_lifetimes.append(current_lifetime)
-        lifetimes.append(bond_lifetimes)
-    analysis_results["hbonds_over_time"] = hbonds_over_time
-    analysis_results["hbonds_per_index"] = hbonds_per_index
-    analysis_results["lifetimes"] = lifetimes
-
-    return analysis_results
+    return _shared_analyze_hydrogen_bonds(data_matrix, metadata)
 
 
 def visualize_data_donor_accpetor_pair(
@@ -949,69 +833,7 @@ def parse_hbond_log_to_dataframe(file_path):
     Returns:
     - pd.DataFrame: DataFrame containing idx, donor, and acceptor columns.
     """
-    hbond_pairs = []
-
-    # Regular expression patterns
-    # Pattern to match lines with donor and acceptor information
-    # Example line: I211O10              -      I211O2
-    line_pattern = re.compile(r"^\s*(\S+)\s+-\s+(\S+)\s*$")
-
-    # Pattern to extract atom name and index from a string like 'I211O10'
-    # Assuming residue identifier is 'I211' and atom name is 'O10'
-    atom_pattern = re.compile(r"^[A-Za-z]+\d+([A-Za-z]+\d*)$")
-
-    with open(file_path, "r") as file:
-        for line_number, line in enumerate(file, start=1):
-            line = line.strip()
-
-            # Skip empty lines and header lines
-            if (
-                not line
-                or line.startswith("#")
-                or line.startswith('"""')
-                or line.startswith("*")
-            ):
-                continue
-
-            # Match the line with donor and acceptor
-            match = line_pattern.match(line)
-            if match:
-                donor_full = match.group(1)  # e.g., 'I211O10'
-                acceptor_full = match.group(2)  # e.g., 'I211O2'
-
-                # Extract atom names using regex
-                donor_match = atom_pattern.match(donor_full)
-                acceptor_match = atom_pattern.match(acceptor_full)
-
-                if donor_match and acceptor_match:
-                    donor_atom = donor_match.group(1)  # e.g., 'O10'
-                    acceptor_atom = acceptor_match.group(1)  # e.g., 'O2'
-
-                    # Refine atom names
-                    refined_donor = refine_atom_name(donor_atom)
-                    refined_acceptor = refine_atom_name(acceptor_atom)
-
-                    # Combine donor and acceptor with colon
-                    pair = {"donor": refined_donor, "acceptor": refined_acceptor}
-                    hbond_pairs.append(pair)
-                else:
-                    print(
-                        f"Warning (Line {line_number}): Couldn't parse atoms in line: {line}"
-                    )
-            else:
-                print(
-                    f"Warning (Line {line_number}): Line didn't match expected format and was skipped: {line}"
-                )
-
-    # Create DataFrame with index
-    df = pd.DataFrame(hbond_pairs)
-    df.reset_index(inplace=True)
-    df.rename(columns={"index": "idx"}, inplace=True)
-
-    # Adjust idx to start from 0
-    df["idx"] = df.index
-
-    return df
+    return _shared_parse_hbond_log_to_dataframe(file_path)
 
 
 def _determine_hbond_command() -> str:

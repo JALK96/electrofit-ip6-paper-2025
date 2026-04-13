@@ -73,15 +73,15 @@ Primary objective: **all generated P->P and row-indexed H-bond outputs must be p
 
 ## Phase A - Guardrails (tests + fixtures) [BLOCKER BEFORE MASS EDITS]
 
-- [ ] A1. Create `tests/` package and baseline test config.
-- [ ] A2. Add compact fixture files for H-bond parser tests (synthetic + one real microstate subset if lightweight).
-- [ ] A3. Add tests:
-  - [ ] XPM parser shape/color handling.
-  - [ ] Row-order alignment against log order.
+- [x] A1. Create `tests/` package and baseline test config.
+- [x] A2. Add compact fixture files for H-bond parser tests (synthetic + one real microstate subset if lightweight).
+- [x] A3. Add tests:
+  - [x] XPM parser shape/color handling.
+  - [x] Row-order alignment against log order.
   - [ ] `hbonds_per_index` row correspondence.
-  - [ ] P->P mapping smoke test for `IP_101101` behavior (specifically non-high `P4->P2` after fix).
-- [ ] A4. Add tests for oxygen mode:
-  - [ ] `all` vs `terminal` yields expected differences.
+  - [x] P->P mapping smoke test for `IP_101101` behavior (specifically non-high `P4->P2` after fix).
+- [x] A4. Add tests for oxygen mode:
+  - [x] `all` vs `terminal` yields expected differences.
 
 Acceptance criteria for Phase A:
 
@@ -92,17 +92,17 @@ Acceptance criteria for Phase A:
 
 ## Phase B - Correctness Implementation (H-bond stack)
 
-- [ ] B1. Add canonical shared module `hbond_io.py`.
-- [ ] B2. Implement canonical XPM parser with correct row alignment semantics.
-- [ ] B3. Move/centralize shared parsing logic now duplicated in:
+- [x] B1. Add canonical shared module `hbond_io.py`.
+- [x] B2. Implement canonical XPM parser with correct row alignment semantics.
+- [x] B3. Move/centralize shared parsing logic now duplicated in:
   - `cli/h_bonds/h_bonds_ip6.py`
   - `structure/util/common_util.py`
   - `cli/h_bonds/make_pp_matrix_ip6.py` (its binary parser)
-- [ ] B4. Update `make_pp_matrix_ip6.py` to consume canonical parser only.
-- [ ] B5. Add oxygen mode option to `make_pp_matrix_ip6.py` internals (`all`/`terminal`).
-- [ ] B6. Wire oxygen mode into CLI in `cli/app.py` for `pp-matrix`.
-- [ ] B7. Update `h_bonds_comparison_ip6_microstates.py` to use canonical parser path.
-- [ ] B8. Update `h_bonds_ip6.py` to use canonical parser path (remove local parser copies or wrap temporarily).
+- [x] B4. Update `make_pp_matrix_ip6.py` to consume canonical parser only.
+- [x] B5. Add oxygen mode option to `make_pp_matrix_ip6.py` internals (`all`/`terminal`).
+- [x] B6. Wire oxygen mode into CLI in `cli/app.py` for `pp-matrix`.
+- [x] B7. Update `h_bonds_comparison_ip6_microstates.py` to use canonical parser path.
+- [x] B8. Update `h_bonds_ip6.py` to use canonical parser path (remove local parser copies or wrap temporarily).
 
 Acceptance criteria for Phase B:
 
@@ -192,19 +192,34 @@ Expected affected artifacts (must be regenerated where needed):
 
 Use this section as a live changelog.
 
-### YYYY-MM-DD
+### 2026-03-16
 
-- Status:
+- Status: In progress (Phase A completed except one optional coverage item; Phase B completed through parser unification + oxygen mode).
 - Files changed:
+  - `src/electrofit_analysis/structure/util/hbond_io.py`
+  - `src/electrofit_analysis/structure/util/common_util.py`
+  - `src/electrofit_analysis/cli/h_bonds/h_bonds_ip6.py`
+  - `src/electrofit_analysis/cli/h_bonds/make_pp_matrix_ip6.py`
+  - `src/electrofit_analysis/cli/app.py`
+  - `tests/conftest.py`
+  - `tests/test_hbond_io.py`
+  - `tests/test_pp_matrix_oxygen_mode.py`
 - Commands run:
+  - `python -m compileall src/electrofit_analysis`
+  - `python -m pytest -q tests`
+  - direct numerical validation scripts for `IP_101101` using patched parser/builder
 - Validation results:
+  - Test suite: `3 passed`
+  - `IP_101101` corrected with aligned rows:
+    - `P4->P2` (union, all): `0.00029997` (was `0.319068` in old artifact)
+    - `P4->P2` (union, terminal): `0.00029997`
 - Open issues:
+  - Phase C cleanup still pending (full removal of duplicated wrappers and mapping centralization).
 
 ---
 
 ## 10) Current Status
 
 - Plan created: 2026-03-16
-- Overall state: `ready_for_execution`
-- Next action: Phase A (tests + fixtures), then Phase B implementation.
-
+- Overall state: `execution_in_progress`
+- Next action: Phase C controlled cleanup (remove remaining wrappers/duplication) and regenerate affected project artifacts.

@@ -6,8 +6,16 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-import networkx as nx
 from matplotlib.patches import FancyArrowPatch
+from electrofit_analysis.structure.util.hbond_io import (
+    parse_hbond_log_pairs as _parse_hbond_log_pairs,
+    parse_xpm_binary as _parse_xpm_binary,
+)
+
+try:
+    import networkx as nx
+except ImportError:  # pragma: no cover - only hit in lightweight test envs
+    nx = None
 
 
 # MODE notes:
@@ -44,6 +52,7 @@ if Lauren:
     RELABEL_P = {'P1':'P1','P2':'P2','P3':'P3','P4':'P4','P5':'P5', 'P6':'P6'}
 
 P2IDX = {f'P{i}': i-1 for i in range(1,7)}
+BRIDGING_O_TOKENS = {'O1', 'O2', 'O3', 'O4', 'O5', 'O6'} if Lauren else {'O', 'O1', 'O2', 'O3', 'O4', 'O5'}
 
 # Map an oxygen token (GROMACS) to a paper phosphate label (P1..P6)
 def map_oxygen_to_paper_pg(otoken: str):
@@ -54,135 +63,29 @@ def map_oxygen_to_paper_pg(otoken: str):
 
 
 def parse_xpm_binary(xpm_path):
-    import numpy as np
-    import re
-
-    with open(xpm_path, "r") as f:
-        lines = f.readlines()
-
-    # --- header ---
-    hdr_i = None
-    for i, L in enumerate(lines):
-        m = re.match(r'^\s*"\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)', L)
-        if m:
-            w, h, ncolors, cpp = map(int, m.groups())
-            hdr_i = i
-            break
-    if hdr_i is None:
-        raise ValueError("XPM header not found")
-
-    # --- colors ---
-    cmap = {}  # symbol -> color (lowercase)
-    i = hdr_i + 1
-    for _ in range(ncolors):
-        L = lines[i].rstrip("\n")
-        i += 1
-        # keep everything inside the first quoted string verbatim
-        q1 = L.find('"')
-        q2 = L.rfind('"')
-        if q1 < 0 or q2 <= q1:
-            raise ValueError(f"Bad color line: {L}")
-        body = L[q1+1:q2]              # do NOT strip; preserves spaces
-        symbol = body[:cpp]
-        rest = body[cpp:]
-        mcol = re.search(r'\bc\s+([^ \t"]+)', rest, flags=re.I)
-        color = (mcol.group(1) if mcol else "").lower()
-        cmap[symbol] = color
-
-    present_syms = {s for s,c in cmap.items() if c in ("#ff0000", "red", "#f00")}
-    if not present_syms:
-        # fallback: anything not white
-        present_syms = {s for s,c in cmap.items() if c not in ("#ffffff", "white")}
-        if not present_syms:
-            present_syms = {next(iter(cmap))}
-
-    bg_syms = [s for s,c in cmap.items() if c in ("#ffffff", "white")]
-    bg = bg_syms[0] if bg_syms else next(s for s in cmap if s not in present_syms)
-
-    # --- pixel rows ---
-    data = []
-    rows = 0
-    need = w * cpp
-    while rows < h and i < len(lines):
-        L = lines[i].rstrip("\n")
-        i += 1
-        if "/*" in L or not L.strip().startswith('"'):
-            continue  # skip comments and non-row lines
-        q1 = L.find('"')
-        q2 = L.rfind('"')
-        if q1 < 0 or q2 <= q1:
-            continue
-        body = L[q1+1:q2]  # keep spaces!
-        if len(body) < need:
-            # pad with background symbol (cpp-safe)
-            body = body + bg * ((need - len(body)) // max(1, cpp))
-        elif len(body) > need:
-            body = body[:need]
-
-        if cpp == 1:
-            tokens = list(body)  # single chars, includes spaces
-        else:
-            tokens = [body[k:k+cpp] for k in range(0, need, cpp)]
-        if len(tokens) != w:
-            raise ValueError(f"Row {rows}: got {len(tokens)} tokens, expected {w}")
-        data.append([1 if t in present_syms else 0 for t in tokens])
-        rows += 1
-
-    if rows != h:
-        raise ValueError(f"Collected {rows} rows, expected {h}")
-
-    return np.array(data, dtype=np.uint8)  # shape (h=bonds, w=frames)
-
-# --- helper: always treat GROMACS O labels as 1-based (O, O1, O2, ...)
-def _extract_O_token(token: str) -> str | None:
-    """Return canonical oxygen label used for mapping.
-    Rules:
-    - Prefer an explicit numeric oxygen label anywhere in the token: O<1-2 digits> (e.g., "IP61O15" -> "O15").
-    - Otherwise, accept a bare 'O' that is **not** followed by a digit, even if it is glued to residue text
-      (e.g., "IP61O" -> "O").
-    - If no oxygen-like token is present, return None (we still keep row alignment; mapping may skip it).
-    """
-    if not token:
-        return None
-    # 1) Numeric oxygen like O7, O14, up to two digits; allow trailing non-digits
-    m = re.search(r"O(\d{1,2})(?!\d)", token)
-    if m:
-        return f"O{m.group(1)}"
-    # 2) Bare 'O' not followed by a digit (e.g., 'IP61O')
-    if re.search(r"O(?!\d)", token):
-        return "O"
-    return None
+    # canonical parser: rows are aligned to hb.log/hb_idx order
+    return _parse_xpm_binary(xpm_path, align_rows_to_log=True)
 
 # ---------- Parse hb.log into ordered donor/acceptor pairs (keep ALL rows) ----------
 def parse_hbond_log(log_path):
-    pairs = []
-    # capture two non-empty tokens around a single dash
-    pat = re.compile(r'^\s*(\S+)\s*-\s*(\S+)\s*$')
-    with open(log_path,'r') as f:
-        for ln in f:
-            if not ln.strip() or ln.lstrip().startswith(('#','*','"')):
-                continue
-            m = pat.match(ln)
-            if not m:
-                continue
-            d_raw, a_raw = m.groups()
-            d_tok = _extract_O_token(d_raw)
-            a_tok = _extract_O_token(a_raw)
-            # keep alignment even if one side isn't an oxygen; mapping will skip it later
-            pairs.append((d_tok, a_tok))
-    return pairs  # length should match XPM height
+    return _parse_hbond_log_pairs(log_path)
 
 # ---------- Build 6x6 matrix of per-time fractions
 # mode:
 #   - 'union' (default): per-frame OR across all O–O rows for a P_i->P_j pair
 #   - 'sum'            : sum of per-row fractions (can exceed 1.0 if multiple O–O bonds coexist)
 #                        This mirrors the comparison script that sums lifetimes per O–O bond.
-def build_matrix(xpm_mat, pairs, mode: str = 'union'):
+def build_matrix(xpm_mat, pairs, mode: str = 'union', oxygen_mode: str = 'all'):
+    if oxygen_mode not in ('all', 'terminal'):
+        raise ValueError("oxygen_mode must be 'all' or 'terminal'")
+
     nbonds, nframes = xpm_mat.shape
     assert nbonds == len(pairs), "XPM rows must match log pairs count."
     # collect row indices per phosphate pair
     rows_by_pair = {(i,j): [] for i in range(6) for j in range(6)}
     for row_idx, (dO, aO) in enumerate(pairs):
+        if oxygen_mode == 'terminal' and ((dO in BRIDGING_O_TOKENS) or (aO in BRIDGING_O_TOKENS)):
+            continue
         dP = map_oxygen_to_paper_pg(dO)
         aP = map_oxygen_to_paper_pg(aO)
         if dP and aP:
@@ -232,6 +135,9 @@ def draw_phosphorus_diagram(
     Draws a directed graph (P1..P6) showing donor->target relationships,
     with the species label centered and pure‐acceptor nodes in white.
     """
+    if nx is None:
+        raise ImportError("networkx is required to draw phosphorus diagrams")
+
     # --- layout helpers ---
     def draw_self_loop(ax, center, outward_vec, width,
                    color="orangered", arrowsize=40,
@@ -544,10 +450,13 @@ def matrix_to_top_three_and_weights(M):
 # ---------- Main ----------
 from electrofit_analysis.cli.common import resolve_stage, normalize_micro_name
 
-def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: str = "continuous", width_ref: str = "auto", stage: str = 'final', only=None):
+def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: str = "continuous", width_ref: str = "absolute", stage: str = 'final', only=None, oxygen_mode: str = "all"):
     root = Path(root)
     run_dir_name, analyze_base = resolve_stage(stage)
     only_norm = {normalize_micro_name(x) for x in only} if only else None
+    if oxygen_mode not in ('all', 'terminal'):
+        raise ValueError("oxygen_mode must be 'all' or 'terminal'")
+
     for ip_dir in sorted(root.glob("IP_*")):
         if only_norm and ip_dir.name not in only_norm:
             continue
@@ -559,43 +468,45 @@ def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: st
         xmat = parse_xpm_binary(xpm)
         pairs = parse_hbond_log(log)
         out_stem = str(hbdir / f"{ip_dir.name}_PtoP_matrix")
+        oxygen_suffix = "" if oxygen_mode == "all" else f"_{oxygen_mode}"
+        mode_label = f", oxygen={oxygen_mode}"
 
         if mode == 'both':
             # union (default naming)
-            M_union = build_matrix(xmat, pairs, mode='union')
-            save_matrix_csv_npy(M_union, out_stem)
-            print(f"[OK] {ip_dir.name}: saved {out_stem}.npy / .csv (union)")
+            M_union = build_matrix(xmat, pairs, mode='union', oxygen_mode=oxygen_mode)
+            save_matrix_csv_npy(M_union, out_stem + oxygen_suffix)
+            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}.npy / .csv (union{mode_label})")
             # Draw diagram (union) using the original function; save into hbdir
             species_bits = ip_dir.name.replace("IP_", "")
             top3_u, ew_u = matrix_to_top_three_and_weights(M_union)
             old_cwd = os.getcwd()
             try:
                 os.chdir(hbdir)
-                draw_phosphorus_diagram(species_bits, f"{species_bits}_union", top3_u, edge_weights=ew_u, width_mode=width_mode, width_ref=width_ref)
+                draw_phosphorus_diagram(species_bits, f"{species_bits}_union{oxygen_suffix}", top3_u, edge_weights=ew_u, width_mode=width_mode, width_ref=width_ref)
             finally:
                 os.chdir(old_cwd)
             # sum-of-bonds (suffix)
-            M_sum = build_matrix(xmat, pairs, mode='sum')
-            save_matrix_csv_npy(M_sum, out_stem + "_sum")
-            print(f"[OK] {ip_dir.name}: saved {out_stem}_sum.npy / .csv (sum-of-bonds)")
+            M_sum = build_matrix(xmat, pairs, mode='sum', oxygen_mode=oxygen_mode)
+            save_matrix_csv_npy(M_sum, out_stem + oxygen_suffix + "_sum")
+            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}_sum.npy / .csv (sum-of-bonds{mode_label})")
             # Draw diagram (sum) using the original function; save into hbdir
             top3_s, ew_s = matrix_to_top_three_and_weights(M_sum)
             old_cwd = os.getcwd()
             try:
                 os.chdir(hbdir)
-                draw_phosphorus_diagram(species_bits, f"{species_bits}_sum", top3_s, edge_weights=ew_s, width_mode=width_mode, width_ref=width_ref)
+                draw_phosphorus_diagram(species_bits, f"{species_bits}_sum{oxygen_suffix}", top3_s, edge_weights=ew_s, width_mode=width_mode, width_ref=width_ref)
             finally:
                 os.chdir(old_cwd)
         else:
-            M = build_matrix(xmat, pairs, mode=mode)
+            M = build_matrix(xmat, pairs, mode=mode, oxygen_mode=oxygen_mode)
             suffix = "" if mode == 'union' else "_sum"
-            save_matrix_csv_npy(M, out_stem + suffix)
+            save_matrix_csv_npy(M, out_stem + oxygen_suffix + suffix)
             tag = "union" if mode == 'union' else "sum-of-bonds" # remove tag for "union"
-            print(f"[OK] {ip_dir.name}: saved {out_stem}{suffix}.npy / .csv ({tag})")
+            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}{suffix}.npy / .csv ({tag}{mode_label})")
             # Draw diagram for the selected mode
             species_bits = ip_dir.name.replace("IP_", "")
             top3, ew = matrix_to_top_three_and_weights(M)
-            label = f"{species_bits}_{tag.replace(' ', '_')}"
+            label = f"{species_bits}_{tag.replace(' ', '_')}{oxygen_suffix}"
             old_cwd = os.getcwd()
             try:
                 os.chdir(hbdir)
@@ -604,7 +515,7 @@ def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: st
                 os.chdir(old_cwd)
 
 if __name__ == "__main__":
-    # Usage: python make_pp_matrix.py [process_root] [intra|inter] [union|sum|both] [continuous|coarse] [auto|absolute]
+    # Usage: python make_pp_matrix.py [process_root] [intra|inter] [union|sum|both] [continuous|coarse] [auto|absolute] [all|terminal]
     root = sys.argv[1] if len(sys.argv) > 1 else "process"
     kind = sys.argv[2] if len(sys.argv) > 2 else "intra"
     mode = sys.argv[3].lower() if len(sys.argv) > 3 else "union"
@@ -617,9 +528,14 @@ if __name__ == "__main__":
         print(f"[WARN] Unknown width mode '{width_mode}', defaulting to 'continuous'.")
         width_mode = "continuous"
 
-    width_ref = sys.argv[5].lower() if len(sys.argv) > 5 else "auto"
+    width_ref = sys.argv[5].lower() if len(sys.argv) > 5 else "absolute"
     if width_ref not in ("auto", "absolute"):
-        print(f"[WARN] Unknown width_ref '{width_ref}', defaulting to 'auto'.")
-        width_ref = "auto"
+        print(f"[WARN] Unknown width_ref '{width_ref}', defaulting to 'absolute'.")
+        width_ref = "absolute"
 
-    main(root, kind, mode, width_mode, width_ref)
+    oxygen_mode = sys.argv[6].lower() if len(sys.argv) > 6 else "all"
+    if oxygen_mode not in ("all", "terminal"):
+        print(f"[WARN] Unknown oxygen_mode '{oxygen_mode}', defaulting to 'all'.")
+        oxygen_mode = "all"
+
+    main(root, kind, mode, width_mode, width_ref, oxygen_mode=oxygen_mode)

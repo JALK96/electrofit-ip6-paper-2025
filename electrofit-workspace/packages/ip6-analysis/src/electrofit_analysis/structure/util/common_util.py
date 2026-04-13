@@ -6,6 +6,13 @@ import logging
 import networkx as nx
 from pathlib import Path
 from typing import Iterable, List
+from electrofit_analysis.structure.util.hbond_io import (
+    analyze_hydrogen_bonds as _shared_analyze_hydrogen_bonds,
+    load_hb_num_xvg as _shared_load_hb_num_xvg,
+    parse_hbond_log_to_dataframe as _shared_parse_hbond_log_to_dataframe,
+    parse_xpm as _shared_parse_xpm,
+    refine_atom_name as _shared_refine_atom_name,
+)
 
 
 logger = logging.getLogger()
@@ -14,163 +21,39 @@ logger = logging.getLogger()
 # Common Utility Functions (hb_comparison.py)
 # ------------------------------------------------------------------------------
 def refine_atom_name(atom):
-    """
-    If we see e.g. 'O' => 'O1', or 'O10' => 'O11'.
-    """
-    if re.fullmatch(r'[A-Za-z]+', atom):
-        return atom + '1'
-    match = re.fullmatch(r'([A-Za-z]+)(\d+)', atom)
-    if match:
-        name = match.group(1)
-        number = int(match.group(2)) + 1
-        return f"{name}{number}"
-    return atom
+    """Thin wrapper over the shared H-bond atom-name canonicalizer."""
+    return _shared_refine_atom_name(atom)
 
 def load_hb_num_xvg(filename):
     """
     (#H-bonds vs time) from .xvg => Nx2 array.
     """
     logger.info(f"Loading H-bond number data from: {filename}")
-    data = []
-    with open(filename, 'r') as f:
-        for line in f:
-            if line.startswith(('@', '#')):
-                continue
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    floats = list(map(float, parts[:2]))
-                    data.append(floats)
-                except ValueError:
-                    pass
-    arr = np.array(data)
+    arr = _shared_load_hb_num_xvg(filename)
     logger.info(f"XVG shape: {arr.shape}")
     return arr
 
-def parse_xpm(file_path):
-    """Parses XPM => binary array (#FF0000 =>1). Returns (arr, metadata)."""
+def parse_xpm(file_path, align_rows_to_log=True):
+    """Parse H-bond XPM and align rows to hb.log order by default."""
     logger.info(f"Parsing XPM: {file_path}")
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-
-    metadata={}
-    data_lines=[]
-    color_map={}
-    header_found=False
-    data_started=False
-    width=height=num_colors=chars_per_pixel=None
-
-    for idx, raw_line in enumerate(lines, start=1):
-        line=raw_line.strip()
-        if line.startswith("/*") and not data_started:
-            comment = line.strip("/* ").strip(" */")
-            if ':' in comment:
-                key, value = comment.split(":",1)
-                metadata[key.strip().lower()] = value.strip().strip('"')
-            continue
-
-        if line.startswith('static char'):
-            continue
-
-        if (not header_found) and line.startswith('"'):
-            line_str=line.strip(',').lstrip('"').rstrip('"')
-            tokens=line_str.split()
-            if len(tokens)>=4:
-                try:
-                    width,height,num_colors,chars_per_pixel=map(int,tokens[:4])
-                    header_found=True
-                    logger.info(f"XPM header => w={width},h={height},colors={num_colors},cpp={chars_per_pixel}")
-                    continue
-                except ValueError:
-                    logger.error(f"Invalid header line {idx}: {raw_line}")
-                    raise
-            else:
-                logger.error(f"Header line {idx} missing tokens: {raw_line}")
-                raise ValueError(f"Bad XPM header line: {raw_line}")
-        if header_found and not data_started:
-            cdef=line.strip(',').lstrip('"').rstrip('"')
-            pattern=rf'(.{{{chars_per_pixel}}})\s+c\s+(\S+)'
-            match=re.match(pattern, cdef)
-            if match:
-                symbol,color_val=match.groups()
-                color_map[symbol]=color_val
-            if len(color_map)==num_colors:
-                data_started=True
-            continue
-        if data_started and line.startswith('"'):
-            row_data=line.strip(',').lstrip('"').rstrip('"')
-            data_lines.append(row_data)
-
-    if width is None or height is None:
-        logger.error("No valid XPM header found.")
-        raise ValueError("XPM header missing.")
-    if len(data_lines)!=height:
-        logger.warning(f"XPM mismatch: expected {height} lines,found {len(data_lines)}")
-
-    arr=np.zeros((height,width), dtype=int)
-    for y,row_str in enumerate(data_lines):
-        for x,ch in enumerate(row_str):
-            color=color_map.get(ch,None)
-            if color=='#FF0000':
-                arr[y,x]=1
+    arr, metadata = _shared_parse_xpm(
+        file_path,
+        align_rows_to_log=align_rows_to_log,
+    )
     logger.info(f"XPM matrix => shape={arr.shape}")
-    return arr,metadata
+    return arr, metadata
 
 def analyze_hydrogen_bonds(data_matrix, metadata):
     """Summaries => over_time, per_index, lifetimes."""
     logger.info("Analyzing hydrogen bond matrix.")
-    hbonds_over_time=np.sum(data_matrix,axis=0)
-    hbonds_per_index=np.sum(data_matrix,axis=1)
-    lifetimes=[]
-    for row in data_matrix:
-        cur=0
-        run_list=[]
-        for val in row:
-            if val==1:
-                cur+=1
-            else:
-                if cur>0:
-                    run_list.append(cur)
-                    cur=0
-        if cur>0:
-            run_list.append(cur)
-        lifetimes.append(run_list)
-    return {
-        'hbonds_over_time':hbonds_over_time,
-        'hbonds_per_index':hbonds_per_index,
-        'lifetimes':lifetimes
-    }
+    return _shared_analyze_hydrogen_bonds(data_matrix, metadata)
 
 def parse_hbond_log_to_dataframe(file_path):
     """
     GROMACS .log => DataFrame [idx, donor, acceptor], refining numeric bits
     """
     logger.info(f"Parsing H-bond log: {file_path}")
-    pairs=[]
-    line_pattern=re.compile(r'^\s*(\S+)\s+-\s+(\S+)\s*$')
-    atom_pattern=re.compile(r'^[A-Za-z]+\d+([A-Za-z]+\d*)$')
-    with open(file_path,'r') as f:
-        for line_no,raw_line in enumerate(f,start=1):
-            line=raw_line.strip()
-            if not line or line.startswith('#') or line.startswith('"""') or line.startswith('*'):
-                continue
-            match=line_pattern.match(line)
-            if match:
-                d_full,a_full=match.groups()
-                d_match=atom_pattern.match(d_full)
-                a_match=atom_pattern.match(a_full)
-                if d_match and a_match:
-                    donor_atom=refine_atom_name(d_match.group(1))
-                    acceptor_atom=refine_atom_name(a_match.group(1))
-                    pairs.append({'donor':donor_atom,'acceptor':acceptor_atom})
-                else:
-                    logger.warning(f"Line {line_no}: parse fail => {line}")
-            else:
-                logger.warning(f"Line {line_no}: no match => {line}")
-    df=pd.DataFrame(pairs)
-    df.reset_index(inplace=True)
-    df.rename(columns={'index':'idx'},inplace=True)
-    df['idx']=df.index
+    df = _shared_parse_hbond_log_to_dataframe(file_path)
     logger.info(f"Found {len(df)} H-bond pairs.")
     return df
 
@@ -404,6 +287,5 @@ def chunks(lst: List, n: int) -> Iterable[List]:
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
-
 
 
