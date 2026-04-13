@@ -101,6 +101,7 @@ def set_up_production(
     threads: int | None = None,
     pin: bool | None = None,
     gpu: bool | None = None,
+    postprocess_on_scratch: bool = True,
 ):
     """Set up und führe eine Produktions‑MD mit GROMACS aus (migrierte Version)."""
     fullpath = os.getcwd()
@@ -266,20 +267,26 @@ def set_up_production(
             cwd=scratch_dir,
         )
         run_command(f"gmx mdrun -deffnm md {_mdrun_flags()}", cwd=scratch_dir)
-        run_command(
-            'echo 0 | gmx trjconv -s md.tpr -f md.xtc -o md_nojump.xtc -pbc nojump',
-            cwd=scratch_dir,
-        )
-        run_command(
-            'echo "1\n0\n" | gmx trjconv -s md.tpr -f md_nojump.xtc -o md_center.xtc -center -pbc mol',
-            cwd=scratch_dir,
-        )
-        run_command(
-            'echo "1\n" | gmx mindist -s md.tpr -f md_center.xtc -pi -od mindist.xvg',
-            cwd=scratch_dir,
-        )
-        run_command(
-            'echo "1" | gmx gyrate -f md_center.xtc -s md.tpr -o gyrate.xvg -xvg none',
-            cwd=scratch_dir,
-        )
-        plot_svg("gyrate.xvg")
+        if postprocess_on_scratch:
+            run_command(
+                'echo 0 | gmx trjconv -s md.tpr -f md.xtc -o md_nojump.xtc -pbc nojump',
+                cwd=scratch_dir,
+            )
+            run_command(
+                'echo "1\n0\n" | gmx trjconv -s md.tpr -f md_nojump.xtc -o md_center.xtc -center -pbc mol',
+                cwd=scratch_dir,
+            )
+            run_command(
+                'echo "1\n" | gmx mindist -s md.tpr -f md_center.xtc -pi -od mindist.xvg',
+                cwd=scratch_dir,
+            )
+            run_command(
+                'echo "1" | gmx gyrate -f md_center.xtc -s md.tpr -o gyrate.xvg -xvg none',
+                cwd=scratch_dir,
+            )
+            plot_svg("gyrate.xvg")
+        else:
+            logging.info(
+                "[postprocess] Skipping md_nojump/md_center/mindist/gyrate on scratch "
+                "(gromacs.runtime.postprocess_on_scratch=false)."
+            )

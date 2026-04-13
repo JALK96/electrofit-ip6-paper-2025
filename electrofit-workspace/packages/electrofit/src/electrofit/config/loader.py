@@ -51,6 +51,7 @@ class GromacsRuntimeSection:
     threads: int = 16
     pin: bool = True
     gpu: bool = False
+    postprocess_on_scratch: bool = True
 
 @dataclass
 class GMXSection:

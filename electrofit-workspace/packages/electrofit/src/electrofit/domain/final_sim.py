@@ -20,6 +20,24 @@ __all__ = [
 ]
 
 
+def _resolve_mdp_source_dir(project_root: Path, cfg) -> Path:
+    """Return absolute MDP source directory resolved from config."""
+    mdp_dir_setting = getattr(getattr(cfg, "paths", None), "mdp_dir", None) or "data/MDP"
+    mdp_source_dir = Path(mdp_dir_setting)
+    if not mdp_source_dir.is_absolute():
+        mdp_source_dir = project_root / mdp_source_dir
+    return mdp_source_dir
+
+
+def _mdp_run_subdir_name(cfg) -> str:
+    """Return the run-local MDP subdirectory name derived from paths.mdp_dir."""
+    mdp_dir_setting = getattr(getattr(cfg, "paths", None), "mdp_dir", None)
+    if not mdp_dir_setting:
+        return "MDP"
+    name = Path(mdp_dir_setting).name
+    return name or "MDP"
+
+
 def prepare_final_sim_directory(
     mol_dir: Path,
     project_root: Path,
@@ -63,13 +81,13 @@ def prepare_final_sim_directory(
                 shutil.copy(acpype_dir / fn, dest_dir)
                 logging.info(f"[step7] Copied {fn} -> {dest_dir}")
                 break
-    mdp_source_dir = project_root / "data" / "MDP"
-    md_dest = dest_dir / "MDP"
+    mdp_source_dir = _resolve_mdp_source_dir(project_root, cfg)
+    md_dest = dest_dir / _mdp_run_subdir_name(cfg)
     if mdp_source_dir.is_dir():
         if md_dest.exists():
             shutil.rmtree(md_dest)
         shutil.copytree(mdp_source_dir, md_dest)
-        logging.info(f"[step7] Copied MDP -> {md_dest}")
+        logging.info(f"[step7] Copied MDP from {mdp_source_dir} -> {md_dest}")
     else:
         logging.warning(f"[step7][warn] no MDP source {mdp_source_dir}")
     bash_script_source = project_root / "scripts" / "gmx.sh"
@@ -115,6 +133,21 @@ def launch_final_sim_run(
     if not gro:
         logging.info(f"[step8][skip] {run_dir}: no .gro file")
         return False, "no gro"
+    mdp_dir = _mdp_run_subdir_name(cfg)
+    mdp_path = run_dir / mdp_dir
+    if not mdp_path.is_dir() and mdp_dir != "MDP":
+        legacy = run_dir / "MDP"
+        if legacy.is_dir():
+            logging.warning(
+                "[step8][warn] configured mdp_dir '%s' missing in %s; falling back to legacy 'MDP'",
+                mdp_dir,
+                run_dir,
+            )
+            mdp_dir = "MDP"
+            mdp_path = legacy
+    if not mdp_path.is_dir():
+        logging.info(f"[step8][skip] {run_dir}: no MDP dir '{mdp_dir}'")
+        return False, f"no mdp dir {mdp_dir}"
     sim = cfg.simulation
     box = sim.box
     ions = sim.ions
@@ -136,7 +169,7 @@ def launch_final_sim_run(
         _os.chdir(run_dir)
         set_up_production(
             m_gro=gro,
-            MDP_dir="MDP",
+            MDP_dir=mdp_dir,
             base_scratch_dir=cfg.paths.base_scratch_dir or "/tmp/electrofit_scratch",
             molecule_name=cfg.project.molecule_name or mol,
             simulation=cfg.simulation,
@@ -145,6 +178,7 @@ def launch_final_sim_run(
             threads=runtime.threads,
             pin=runtime.pin,
             gpu=runtime.gpu,
+            postprocess_on_scratch=getattr(runtime, "postprocess_on_scratch", True),
         )
     finally:
         _os.chdir(prev)
