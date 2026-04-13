@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os
+import logging
 import re
 import sys
 import numpy as np
@@ -11,12 +11,17 @@ from electrofit_analysis.structure.util.hbond_io import (
     parse_hbond_log_pairs as _parse_hbond_log_pairs,
     parse_xpm_binary as _parse_xpm_binary,
 )
+from electrofit_analysis.structure.util.phosphate_mapping import (
+    map_gromacs_oxygen_to_paper_phosphate,
+    mapping_tables,
+)
 
 try:
     import networkx as nx
 except ImportError:  # pragma: no cover - only hit in lightweight test envs
     nx = None
 
+logger = logging.getLogger(__name__)
 
 # MODE notes:
 #  - 'union' (default): fraction of time with at least one O–O bond for each P_i->P_j (per-frame OR)
@@ -26,40 +31,14 @@ except ImportError:  # pragma: no cover - only hit in lightweight test envs
 #
 # ---------- O-atom -> phosphate mapping ----------
 
-# GROMACS mapping (as found in hb.log): oxygen token -> GROMACS phosphate label (P, P1..P5)
-GRO_O2P = {
-    'O':'P',  'O6':'P',  'O7':'P',  'O8':'P',
-    'O1':'P1','O9':'P1','O10':'P1','O11':'P1',
-    'O2':'P2','O12':'P2','O13':'P2','O14':'P2',
-    'O3':'P3','O15':'P3','O16':'P3','O17':'P3',
-    'O4':'P4','O18':'P4','O19':'P4','O20':'P4',
-    'O5':'P5','O21':'P5','O22':'P5','O23':'P5'
-}
-# Relabel GROMACS phosphate labels to paper convention P1..P6
-RELABEL_P = {'P':'P1','P1':'P2','P2':'P3','P3':'P4','P4':'P5','P5':'P6'}
-
 Lauren = False
-if Lauren: 
-    # Lauren has already correct labels - her map here: 
-    GRO_O2P = {
-        'O1': 'P1',  'O7': 'P1',  'O8': 'P1',  'O9': 'P1',
-        'O2': 'P2', 'O10': 'P2', 'O11': 'P2', 'O12': 'P2',
-        'O3': 'P3', 'O13': 'P3', 'O14': 'P3', 'O15': 'P3',
-        'O4': 'P4', 'O16': 'P4', 'O17': 'P4', 'O18': 'P4',
-        'O5': 'P5', 'O19': 'P5', 'O20': 'P5', 'O21': 'P5',
-        'O6': 'P6', 'O22': 'P6', 'O23': 'P6', 'O24': 'P6'
-    }
-    RELABEL_P = {'P1':'P1','P2':'P2','P3':'P3','P4':'P4','P5':'P5', 'P6':'P6'}
 
 P2IDX = {f'P{i}': i-1 for i in range(1,7)}
-BRIDGING_O_TOKENS = {'O1', 'O2', 'O3', 'O4', 'O5', 'O6'} if Lauren else {'O', 'O1', 'O2', 'O3', 'O4', 'O5'}
+_, _, BRIDGING_O_TOKENS = mapping_tables(lauren_labels=Lauren)
 
 # Map an oxygen token (GROMACS) to a paper phosphate label (P1..P6)
 def map_oxygen_to_paper_pg(otoken: str):
-    pg = GRO_O2P.get(otoken)
-    if not pg:
-        return None
-    return RELABEL_P.get(pg, pg)
+    return map_gromacs_oxygen_to_paper_phosphate(otoken, lauren_labels=Lauren)
 
 
 def parse_xpm_binary(xpm_path):
@@ -92,7 +71,9 @@ def build_matrix(xpm_mat, pairs, mode: str = 'union', oxygen_mode: str = 'all'):
             rows_by_pair[(P2IDX[dP], P2IDX[aP])].append(row_idx)
     mapped_rows = sum(len(v) for v in rows_by_pair.values())
     if mapped_rows == 0:
-        print("[WARN] No O->O rows mapped to phosphate pairs. Check O-label extraction and GRO_O2P mapping for this system.")
+        logger.warning(
+            "No O->O rows mapped to phosphate pairs. Check O-label extraction and phosphate mapping for this system."
+        )
 
     M = np.zeros((6,6), dtype=float)
     for (i,j), rows in rows_by_pair.items():
@@ -129,7 +110,8 @@ def draw_phosphorus_diagram(
         width_ref="auto",               # "auto" (relative to max in this graph) or "absolute" (fraction 0..1)
         min_w=1.0, max_w=20.0,          # continuous scaling bounds (up to 20 pt)
         coarse_step=0.01,               # 1% bins by default
-        coarse_min=1.0, coarse_max=20.0 # 1..20 pt for coarse
+        coarse_min=1.0, coarse_max=20.0, # 1..20 pt for coarse
+        output_dir: Path | str | None = None,
 ):
     """
     Draws a directed graph (P1..P6) showing donor->target relationships,
@@ -410,7 +392,9 @@ def draw_phosphorus_diagram(
     ax.set_axis_off()
     #plt.tight_layout()
     #plt.show()
-    plt.savefig(f"species_{species_id}.pdf", transparent=True, bbox_inches='tight', pad_inches=0.15)
+    output_name = f"species_{species_id}.pdf"
+    output_path = Path(output_dir) / output_name if output_dir else Path(output_name)
+    plt.savefig(output_path, transparent=True, bbox_inches='tight', pad_inches=0.15)
     plt.close()
 
 # --- layout helpers ---
@@ -475,44 +459,62 @@ def main(root="process", hbond_kind="intra", mode: str = "union", width_mode: st
             # union (default naming)
             M_union = build_matrix(xmat, pairs, mode='union', oxygen_mode=oxygen_mode)
             save_matrix_csv_npy(M_union, out_stem + oxygen_suffix)
-            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}.npy / .csv (union{mode_label})")
+            logger.info(
+                "%s: saved %s%s.npy / .csv (union%s)",
+                ip_dir.name, out_stem, oxygen_suffix, mode_label
+            )
             # Draw diagram (union) using the original function; save into hbdir
             species_bits = ip_dir.name.replace("IP_", "")
             top3_u, ew_u = matrix_to_top_three_and_weights(M_union)
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(hbdir)
-                draw_phosphorus_diagram(species_bits, f"{species_bits}_union{oxygen_suffix}", top3_u, edge_weights=ew_u, width_mode=width_mode, width_ref=width_ref)
-            finally:
-                os.chdir(old_cwd)
+            draw_phosphorus_diagram(
+                species_bits,
+                f"{species_bits}_union{oxygen_suffix}",
+                top3_u,
+                edge_weights=ew_u,
+                width_mode=width_mode,
+                width_ref=width_ref,
+                output_dir=hbdir,
+            )
             # sum-of-bonds (suffix)
             M_sum = build_matrix(xmat, pairs, mode='sum', oxygen_mode=oxygen_mode)
             save_matrix_csv_npy(M_sum, out_stem + oxygen_suffix + "_sum")
-            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}_sum.npy / .csv (sum-of-bonds{mode_label})")
+            logger.info(
+                "%s: saved %s%s_sum.npy / .csv (sum-of-bonds%s)",
+                ip_dir.name, out_stem, oxygen_suffix, mode_label
+            )
             # Draw diagram (sum) using the original function; save into hbdir
             top3_s, ew_s = matrix_to_top_three_and_weights(M_sum)
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(hbdir)
-                draw_phosphorus_diagram(species_bits, f"{species_bits}_sum{oxygen_suffix}", top3_s, edge_weights=ew_s, width_mode=width_mode, width_ref=width_ref)
-            finally:
-                os.chdir(old_cwd)
+            draw_phosphorus_diagram(
+                species_bits,
+                f"{species_bits}_sum{oxygen_suffix}",
+                top3_s,
+                edge_weights=ew_s,
+                width_mode=width_mode,
+                width_ref=width_ref,
+                output_dir=hbdir,
+            )
         else:
             M = build_matrix(xmat, pairs, mode=mode, oxygen_mode=oxygen_mode)
             suffix = "" if mode == 'union' else "_sum"
             save_matrix_csv_npy(M, out_stem + oxygen_suffix + suffix)
             tag = "union" if mode == 'union' else "sum-of-bonds" # remove tag for "union"
-            print(f"[OK] {ip_dir.name}: saved {out_stem}{oxygen_suffix}{suffix}.npy / .csv ({tag}{mode_label})")
+            logger.info(
+                "%s: saved %s%s%s.npy / .csv (%s%s)",
+                ip_dir.name, out_stem, oxygen_suffix, suffix, tag, mode_label
+            )
             # Draw diagram for the selected mode
             species_bits = ip_dir.name.replace("IP_", "")
             top3, ew = matrix_to_top_three_and_weights(M)
             label = f"{species_bits}_{tag.replace(' ', '_')}{oxygen_suffix}"
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(hbdir)
-                draw_phosphorus_diagram(species_bits, label, top3, edge_weights=ew, width_mode=width_mode, width_ref=width_ref)
-            finally:
-                os.chdir(old_cwd)
+            draw_phosphorus_diagram(
+                species_bits,
+                label,
+                top3,
+                edge_weights=ew,
+                width_mode=width_mode,
+                width_ref=width_ref,
+                output_dir=hbdir,
+            )
 
 if __name__ == "__main__":
     # Usage: python make_pp_matrix.py [process_root] [intra|inter] [union|sum|both] [continuous|coarse] [auto|absolute] [all|terminal]
@@ -520,22 +522,22 @@ if __name__ == "__main__":
     kind = sys.argv[2] if len(sys.argv) > 2 else "intra"
     mode = sys.argv[3].lower() if len(sys.argv) > 3 else "union"
     if mode not in ("union", "sum", "both"):
-        print(f"[WARN] Unknown mode '{mode}', defaulting to 'union'.")
+        logger.warning("Unknown mode '%s', defaulting to 'union'.", mode)
         mode = "union"
 
     width_mode = sys.argv[4].lower() if len(sys.argv) > 4 else "continuous"
     if width_mode not in ("continuous", "coarse"):
-        print(f"[WARN] Unknown width mode '{width_mode}', defaulting to 'continuous'.")
+        logger.warning("Unknown width mode '%s', defaulting to 'continuous'.", width_mode)
         width_mode = "continuous"
 
     width_ref = sys.argv[5].lower() if len(sys.argv) > 5 else "absolute"
     if width_ref not in ("auto", "absolute"):
-        print(f"[WARN] Unknown width_ref '{width_ref}', defaulting to 'absolute'.")
+        logger.warning("Unknown width_ref '%s', defaulting to 'absolute'.", width_ref)
         width_ref = "absolute"
 
     oxygen_mode = sys.argv[6].lower() if len(sys.argv) > 6 else "all"
     if oxygen_mode not in ("all", "terminal"):
-        print(f"[WARN] Unknown oxygen_mode '{oxygen_mode}', defaulting to 'all'.")
+        logger.warning("Unknown oxygen_mode '%s', defaulting to 'all'.", oxygen_mode)
         oxygen_mode = "all"
 
     main(root, kind, mode, width_mode, width_ref, oxygen_mode=oxygen_mode)

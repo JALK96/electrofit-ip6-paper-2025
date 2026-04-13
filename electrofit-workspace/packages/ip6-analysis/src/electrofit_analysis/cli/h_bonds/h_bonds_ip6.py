@@ -14,72 +14,15 @@ from rdkit import Chem
 from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 from electrofit.cli.run_commands import run_command
-from electrofit.io.files import find_file_with_extension
 from electrofit_analysis.structure.util.hbond_io import (
-    analyze_hydrogen_bonds as _shared_analyze_hydrogen_bonds,
-    load_hb_num_xvg as _shared_load_hb_num_xvg,
-    parse_hbond_log_to_dataframe as _shared_parse_hbond_log_to_dataframe,
-    parse_xpm as _shared_parse_xpm,
-    refine_atom_name as _shared_refine_atom_name,
+    analyze_hydrogen_bonds,
+    load_hb_num_xvg,
+    parse_hbond_log_to_dataframe,
+    parse_xpm,
+    refine_atom_name,
 )
 
 sns.set_context("talk")
-
-
-def load_hb_num_xvg(filename):
-    """
-    Load data from an .xvg file, skipping lines that start with @ or #.
-
-    Parameters:
-        filename (str): Path to the .xvg file.
-
-    Returns:
-        np.ndarray: 2D array with the data.
-    """
-    return _shared_load_hb_num_xvg(filename)
-
-
-def refine_atom_name(atom):
-    """
-    Refines the atom name based on specified rules:
-    - If the atom is named 'O', change it to 'O1'.
-    - If the atom is named 'O<number>', increment the number by 1 (e.g., 'O10' to 'O11').
-
-    Parameters:
-    - atom (str): Original atom name.
-
-    Returns:
-    - str: Refined atom name.
-    """
-    return _shared_refine_atom_name(atom)
-
-
-def parse_xpm(file_path):
-    """
-    Parses an XPM file and converts it to a binary NumPy array.
-
-    Parameters:
-    - file_path: str, path to the XPM file.
-
-    Returns:
-    - data_matrix: np.ndarray, binary matrix representing hydrogen bonds.
-    - metadata: dict, contains title, labels, etc.
-    """
-    return _shared_parse_xpm(file_path, align_rows_to_log=True)
-
-
-def analyze_hydrogen_bonds(data_matrix, metadata):
-    """
-    Analyzes the hydrogen bond data.
-
-    Parameters:
-    - data_matrix: np.ndarray, binary matrix representing hydrogen bonds.
-    - metadata: dict, contains title, labels, etc.
-
-    Returns:
-    - analysis_results: dict, contains various analysis metrics.
-    """
-    return _shared_analyze_hydrogen_bonds(data_matrix, metadata)
 
 
 def visualize_data_donor_accpetor_pair(
@@ -822,20 +765,6 @@ def add_legend_to_svg(svg_content, legend_svg_content):
     print("Legend added to SVG.")
     return svg_content
 
-
-def parse_hbond_log_to_dataframe(file_path):
-    """
-    Parses a GROMACS .log file to extract donor-acceptor pairs with indices and refined atom names.
-
-    Parameters:
-    - file_path (str): Path to the .log file.
-
-    Returns:
-    - pd.DataFrame: DataFrame containing idx, donor, and acceptor columns.
-    """
-    return _shared_parse_hbond_log_to_dataframe(file_path)
-
-
 def _determine_hbond_command() -> str:
     """Determine which gmx hbond variant supports the expected flags."""
     try:
@@ -1052,10 +981,12 @@ def main(project_dir: str, viz: bool = False, stage: str = 'final', only=None, r
                     print(top_hbonds_df)
 
                     # Path to your MOL2 file
-                    os.chdir(run_gau_create_gmx_in_dir)
-                    mol2_file_name = find_file_with_extension("mol2")
-                    os.chdir(dest_dir)
-                    mol2_file = os.path.join(run_gau_create_gmx_in_dir, mol2_file_name)
+                    mol2_candidates = sorted(Path(run_gau_create_gmx_in_dir).glob("*.mol2"))
+                    if not mol2_candidates:
+                        raise FileNotFoundError(
+                            f"No .mol2 file found in {run_gau_create_gmx_in_dir}"
+                        )
+                    mol2_file = str(mol2_candidates[0])
 
                     # Load the molecule
                     molecule = Chem.MolFromMol2File(mol2_file, removeHs=False)

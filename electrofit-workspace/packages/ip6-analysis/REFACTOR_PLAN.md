@@ -78,7 +78,7 @@ Primary objective: **all generated P->P and row-indexed H-bond outputs must be p
 - [x] A3. Add tests:
   - [x] XPM parser shape/color handling.
   - [x] Row-order alignment against log order.
-  - [ ] `hbonds_per_index` row correspondence.
+  - [x] `hbonds_per_index` row correspondence.
   - [x] P->P mapping smoke test for `IP_101101` behavior (specifically non-high `P4->P2` after fix).
 - [x] A4. Add tests for oxygen mode:
   - [x] `all` vs `terminal` yields expected differences.
@@ -114,11 +114,11 @@ Acceptance criteria for Phase B:
 
 ## Phase C - Controlled Cleanup (duplication and consistency)
 
-- [ ] C1. Remove duplicated parser/analysis functions after migration:
+- [x] C1. Remove duplicated parser/analysis functions after migration:
   - `parse_xpm`, `analyze_hydrogen_bonds`, `parse_hbond_log_to_dataframe`, `load_hb_num_xvg`, `refine_atom_name` duplicates.
-- [ ] C2. Consolidate phosphate mapping constants into one shared place for H-bond workflows.
-- [ ] C3. Reconcile/centralize `draw_phosphorus_diagram` duplication (currently two implementations).
-- [ ] C4. Ensure no remaining callers import removed duplicates.
+- [x] C2. Consolidate phosphate mapping constants into one shared place for H-bond workflows.
+- [x] C3. Reconcile/centralize `draw_phosphorus_diagram` duplication (currently two implementations).
+- [x] C4. Ensure no remaining callers import removed duplicates.
 
 Acceptance criteria for Phase C:
 
@@ -129,10 +129,10 @@ Acceptance criteria for Phase C:
 
 ## Phase D - Package-wide hygiene (non-blocking for bug fix)
 
-- [ ] D1. Remove/archive old coordination summarizer module (`summerize_nap_dist_count_ip6_old.py`) from active paths.
-- [ ] D2. Reduce `os.chdir` usage in CLI modules (prefer absolute paths).
-- [ ] D3. Replace ad-hoc `print` statements with logging where practical.
-- [ ] D4. Clarify CLI entrypoint docs (`cli.py` Typer stub vs `cli/app.py`).
+- [x] D1. Remove/archive old coordination summarizer module (`summerize_nap_dist_count_ip6_old.py`) from active paths.
+- [x] D2. Reduce `os.chdir` usage in CLI modules (prefer absolute paths).
+- [x] D3. Replace ad-hoc `print` statements with logging where practical.
+- [x] D4. Clarify CLI entrypoint docs (`cli.py` Typer stub vs `cli/app.py`).
 
 Acceptance criteria for Phase D:
 
@@ -216,10 +216,32 @@ Use this section as a live changelog.
 - Open issues:
   - Phase C cleanup still pending (full removal of duplicated wrappers and mapping centralization).
 
+### 2026-04-13
+
+- Status: Follow-up cleanup completed (A3 + Phase C + Phase D).
+- Files changed:
+  - `src/electrofit_analysis/tests/test_hbond_io.py`
+  - `src/electrofit_analysis/structure/util/phosphate_mapping.py`
+  - `src/electrofit_analysis/structure/util/common_util.py`
+  - `src/electrofit_analysis/cli/h_bonds/make_pp_matrix_ip6.py`
+  - `src/electrofit_analysis/cli/h_bonds/h_bonds_ip6.py`
+  - `src/electrofit_analysis/cli/h_bonds/h_bonds_comparison_ip6_microstates.py`
+  - `src/electrofit_analysis/cli/coordination/archive/summerize_nap_dist_count_ip6_old.py`
+  - `src/electrofit_analysis/cli.py`
+- Commands run:
+  - `python -m compileall src/electrofit_analysis`
+  - `python -m pytest -q tests`
+  - `rg` checks for duplicate parser definitions
+- Validation results:
+  - Test suite: `3 passed, 1 skipped`
+  - `rg` now reports a single authoritative implementation for parser/analyzer functions in `hbond_io.py`
+- Open issues:
+  - None identified for the planned A3/C/D scope.
+
 ---
 
 ## 10) Current Status
 
 - Plan created: 2026-03-16
-- Overall state: `execution_in_progress`
-- Next action: Phase C controlled cleanup (remove remaining wrappers/duplication) and regenerate affected project artifacts.
+- Overall state: `completed_for_defined_scope`
+- Next action: Regenerate and republish downstream artifacts that depend on the updated workflows.

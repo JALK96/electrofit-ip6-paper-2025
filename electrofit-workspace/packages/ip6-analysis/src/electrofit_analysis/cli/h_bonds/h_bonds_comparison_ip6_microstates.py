@@ -49,6 +49,9 @@ from electrofit_analysis.viz.hbond_helpers import (
     three_by_two_plots_box_violin,
     generate_summary_plot
 )
+from electrofit_analysis.structure.util.phosphate_mapping import (
+    PAPER_ONE_BASED_OXYGEN_TO_PHOSPHATE,
+)
 
 # ------------------------------------------------------------------------------
 # Logging & Font Setup (configured in main)
@@ -62,15 +65,8 @@ sns.set_style({'font.family':'serif', 'font.serif':'Times New Roman'})
 # ------------------------------------------------------------------------------
 # Donor & Acceptor → Phosphate Mapping
 # ------------------------------------------------------------------------------
-donor_to_phosphate = {
-    'O1': 'P1','O7': 'P1','O8': 'P1','O9': 'P1',
-    'O2': 'P2','O10': 'P2','O11': 'P2','O12': 'P2',
-    'O3': 'P3','O13': 'P3','O14': 'P3','O15': 'P3',
-    'O4': 'P4','O16': 'P4','O17': 'P4','O18': 'P4',
-    'O5': 'P5','O19': 'P5','O20': 'P5','O21': 'P5',
-    'O6': 'P6','O22': 'P6','O23': 'P6','O24': 'P6'
-}
-acceptor_to_phosphate = donor_to_phosphate  # same mapping if acceptors are in [O1..O24]
+donor_to_phosphate = PAPER_ONE_BASED_OXYGEN_TO_PHOSPHATE
+acceptor_to_phosphate = PAPER_ONE_BASED_OXYGEN_TO_PHOSPHATE
 
 # ------------------------------------------------------------------------------
 # Textual Table: Donor→Acceptor usage

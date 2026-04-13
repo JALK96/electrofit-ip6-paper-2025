@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 
 from electrofit_analysis.cli.h_bonds.make_pp_matrix_ip6 import build_matrix, parse_hbond_log
-from electrofit_analysis.structure.util.hbond_io import parse_xpm
+from electrofit_analysis.structure.util.hbond_io import (
+    analyze_hydrogen_bonds,
+    parse_hbond_log_to_dataframe,
+    parse_xpm,
+)
 
 
 def _write_minimal_xpm(path: Path, rows: list[str], *, one_symbol: str = "o") -> None:
@@ -83,3 +87,36 @@ def test_ip101101_regression_row_alignment_lowers_implausible_p4_to_p2() -> None
 
     assert p4_to_p2_old > 0.2
     assert p4_to_p2_new < 0.01
+
+
+def test_hbonds_per_index_corresponds_to_log_row_indices(tmp_path: Path) -> None:
+    xpm = tmp_path / "hb_idx.xpm"
+    log = tmp_path / "hb_idx.log"
+
+    # Image-row order (top->bottom) intentionally opposite to logical log order.
+    _write_minimal_xpm(
+        xpm,
+        rows=[
+            "ooo ",  # will become logical row 2 after alignment; sum=3
+            " o  ",  # logical row 1; sum=1
+            "  oo",  # logical row 0; sum=2
+        ],
+    )
+    _write_minimal_log(
+        log,
+        [
+            ("IP61O10", "IP61O2"),
+            ("IP61O11", "IP61O3"),
+            ("IP61O12", "IP61O4"),
+        ],
+    )
+
+    matrix, meta = parse_xpm(xpm, align_rows_to_log=True)
+    analysis = analyze_hydrogen_bonds(matrix, meta)
+    hbond_df = parse_hbond_log_to_dataframe(log)
+    hbonds_per_index = analysis["hbonds_per_index"]
+
+    # idx=0/1/2 must refer to the aligned matrix rows 0/1/2 respectively.
+    assert hbond_df["idx"].tolist() == [0, 1, 2]
+    assert hbonds_per_index.tolist() == [2, 1, 3]
+    assert all(hbonds_per_index[idx] == expected for idx, expected in enumerate([2, 1, 3]))
