@@ -30,7 +30,7 @@ full = [
   "matplotlib",
   "mdtraj",
   "acpype",
-  "openbabel-wheel",  # PyPI wheel (not as feature-complete as conda OpenBabel)
+  "openbabel>=3.2.0",  # PyPI wheel (not as feature-complete as conda OpenBabel)
   # You can add other pip-available extras here as needed.
 ]
 
