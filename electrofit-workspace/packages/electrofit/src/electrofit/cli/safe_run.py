@@ -192,34 +192,52 @@ def _cleanup(reason: str = "atexit") -> None:
     _state.mark_cleaned()
 
 
-def _signal_process_tree(proc, signum) -> None:
-    """Send signum to a child started by run_command and to its descendants.
+def _descendants(proc) -> list:
+    """psutil handles of the processes below a child started by run_command.
 
-    Commands run through a shell, so the GROMACS process can be a grandchild.
+    Commands run through ``/bin/sh -c``, so the GROMACS process can be a grandchild.
     """
-    targets = []
     try:
         import psutil
 
-        targets = psutil.Process(proc.pid).children(recursive=True)
+        return psutil.Process(proc.pid).children(recursive=True)
     except Exception:
-        pass
+        return []
+
+
+def _alive(process) -> bool:
+    try:
+        import psutil
+
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        return False
+
+
+def _signal_command(proc, descendants, signum) -> None:
+    """Signal the running descendants of a command, or the command itself if it has none.
+
+    The shell is not signalled: it would exit at once and leave its GROMACS child
+    writing the checkpoint unobserved.
+    """
+    targets = [d for d in descendants if _alive(d)]
+    if not targets:
+        targets = [proc] if proc.poll() is None else []
     for target in targets:
         try:
             target.send_signal(signum)
         except Exception:
             pass
-    try:
-        proc.send_signal(signum)
-    except Exception:
-        pass
 
 
-def _wait_draining(procs, timeout: float) -> None:
-    """Wait until procs exit, discarding their output so they cannot block on full pipes."""
+def _wait_draining(procs, descendants, timeout: float) -> None:
+    """Wait until procs and their descendants exit, discarding pipe output meanwhile."""
     import os
     import select
     import time
+
+    def running():
+        return any(p.poll() is None for p in procs) or any(_alive(d) for d in descendants)
 
     fds = set()
     for p in procs:
@@ -230,7 +248,7 @@ def _wait_draining(procs, timeout: float) -> None:
             except Exception:
                 pass
     deadline = time.monotonic() + timeout
-    while any(p.poll() is None for p in procs) and time.monotonic() < deadline:
+    while running() and time.monotonic() < deadline:
         if not fds:
             time.sleep(0.5)
             continue
@@ -250,9 +268,11 @@ def _stop_running_commands(grace: float = 15.0, term_wait: float = 120.0) -> Non
     """Let commands started by run_command exit before scratch is finalized.
 
     A terminal interrupt also reaches the children (same process group); GROMACS
-    then writes a checkpoint and exits. Children still running after ``grace``
+    then writes a checkpoint and exits. Commands still running after ``grace``
     seconds, for example when only this process was signalled, receive one
-    SIGTERM, and SIGKILL after ``term_wait`` more seconds.
+    SIGTERM, and SIGKILL after ``term_wait`` more seconds. Waiting covers the
+    descendants recorded at the start, so a shell that exits early does not end
+    the wait while its GROMACS child is still writing.
     """
     try:
         from electrofit.cli.run_commands import active_processes
@@ -262,14 +282,18 @@ def _stop_running_commands(grace: float = 15.0, term_wait: float = 120.0) -> Non
         return
     if not procs:
         return
-    _wait_draining(procs, grace)
-    remaining = [p for p in procs if p.poll() is None]
-    for proc in remaining:
-        _signal_process_tree(proc, signal.SIGTERM)
-    _wait_draining(remaining, term_wait)
-    for proc in remaining:
-        if proc.poll() is None:
-            _signal_process_tree(proc, signal.SIGKILL)
+    tree = {proc: _descendants(proc) for proc in procs}
+    everything = [d for ds in tree.values() for d in ds]
+    _wait_draining(procs, everything, grace)
+    for proc, descendants in tree.items():
+        _signal_command(proc, descendants, signal.SIGTERM)
+    _wait_draining(procs, everything, term_wait)
+    for proc, descendants in tree.items():
+        for target in [d for d in descendants if _alive(d)] + ([proc] if proc.poll() is None else []):
+            try:
+                target.send_signal(signal.SIGKILL)
+            except Exception:
+                pass
 
 
 _handling_signal = False
