@@ -111,6 +111,7 @@ def launch_final_sim_run(
     project_root: Path,
     multi_mol: bool,
     override_cfg: Path | None,
+    prepare_only: bool = False,
 ) -> Tuple[bool, str]:
     """Launch final production simulation in an existing prepared directory."""
     mol = run_dir.parent.name
@@ -179,6 +180,7 @@ def launch_final_sim_run(
             pin=runtime.pin,
             gpu=runtime.gpu,
             postprocess_on_scratch=getattr(runtime, "postprocess_on_scratch", True),
+            prepare_only=prepare_only,
         )
     finally:
         _os.chdir(prev)

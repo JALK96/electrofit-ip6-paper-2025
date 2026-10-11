@@ -102,6 +102,7 @@ def set_up_production(
     pin: bool | None = None,
     gpu: bool | None = None,
     postprocess_on_scratch: bool = True,
+    prepare_only: bool = False,
 ):
     """Set up und führe eine Produktions‑MD mit GROMACS aus (migrierte Version)."""
     fullpath = os.getcwd()
@@ -183,6 +184,13 @@ def set_up_production(
         )
         run_command(genion_cmd, cwd=scratch_dir)
         run_command(f"tail {m_gro_name}.top", cwd=scratch_dir)
+
+        if prepare_only:
+            logging.info(
+                "[prepare-only] Solvated and ionized GROMACS inputs are complete; "
+                "skipping EM, NVT, NPT, production, and postprocessing."
+            )
+            return
 
         # -------- Decide thread flags ONCE and reuse for all mdrun calls --------
         try:
