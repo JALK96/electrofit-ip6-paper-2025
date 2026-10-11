@@ -10,7 +10,7 @@ from typing import Iterable, Tuple
 
 from electrofit.config.loader import load_config, dump_config
 from electrofit.infra.config_snapshot import compose_snapshot
-from electrofit.io.ff import validate_forcefield, ensure_forcefield_installed
+from electrofit.io.ff import is_forcefield_path, stage_forcefield, validate_forcefield
 
 __all__ = [
     "prepare_remd_sim_directory",
@@ -120,21 +120,18 @@ def launch_remd_run(
         logging.info(f"[step8remd][skip] {run_dir}: no .gro file")
         return False, "no gro"
 
-    # Resolve forcefield specification, supporting both short names
-    # (e.g. 'amber14sb.ff') and explicit paths (installed if needed),
-    # mirroring the behaviour used in step3.
+    # Resolve forcefield specification: a path is staged into the run directory
+    # (and from there into scratch); a short name (e.g. 'amber14sb.ff') resolves
+    # from the GROMACS installation, mirroring step3.
     sim = getattr(cfg, "simulation", None)
     ff_attr = getattr(sim, "forcefield", None) if sim else None
     ff_raw = ff_attr or "amber14sb.ff"
 
-    if isinstance(ff_raw, str) and (
-        os.path.isabs(ff_raw) or os.sep in ff_raw or ff_raw.startswith(".")
-    ):
-        # Path-like: ensure it is installed under the active GMX top and
-        # then use the short directory name for includes.
+    staged_ff = is_forcefield_path(ff_raw)
+    if staged_ff:
         ff_abs = ff_raw if os.path.isabs(ff_raw) else os.path.join(str(project_root), ff_raw)
         try:
-            ff = ensure_forcefield_installed(ff_abs)
+            ff = stage_forcefield(ff_abs, str(run_dir))
         except Exception as e:
             msg = f"[step8remd][abort] {e}"
             logging.error(msg)
@@ -146,12 +143,13 @@ def launch_remd_run(
 
     # Validate that the resolved forcefield directory exists so we fail
     # early with a clear diagnostic instead of a grompp include error.
-    try:
-        validate_forcefield(ff, explicit=explicit_ff)
-    except FileNotFoundError as e:
-        msg = f"[step8remd][abort] {e}"
-        logging.error(msg)
-        return False, msg
+    if not staged_ff:
+        try:
+            validate_forcefield(ff, explicit=explicit_ff)
+        except FileNotFoundError as e:
+            msg = f"[step8remd][abort] {e}"
+            logging.error(msg)
+            return False, msg
 
     from electrofit.adapters.gromacs_remd import set_up_remd
 

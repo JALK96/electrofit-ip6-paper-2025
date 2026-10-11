@@ -45,12 +45,20 @@ class PathsSection:
 
 # (HPC section removed for now)
 
-# GROMACS runtime knobs (threads, pinning)
+# GROMACS runtime knobs (threads, pinning, GPU offload)
 @dataclass
 class GromacsRuntimeSection:
     threads: int = 16
     pin: bool = True
     gpu: bool = False
+    # GPU runs: device index for -gpu_id, and PME/bonded/update placement
+    # ("auto" lets GROMACS offload each where the stage supports it; "gpu"/"cpu").
+    gpu_id: str | None = None
+    gpu_pme: str = "auto"
+    gpu_bonded: str = "auto"
+    gpu_update: str = "auto"
+    # Checkpoint interval of MD stages in minutes (mdrun -cpt); None keeps GROMACS' 15.
+    checkpoint_minutes: float | None = None
     postprocess_on_scratch: bool = True
 
 @dataclass

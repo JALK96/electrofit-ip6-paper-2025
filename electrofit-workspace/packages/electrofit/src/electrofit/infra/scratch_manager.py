@@ -9,20 +9,24 @@ import hashlib
 from electrofit.infra.logging import setup_logging
 
 __all__ = [
+    "scratch_dir_for",
     "setup_scratch_directory",
     "directories_differ",
     "finalize_scratch_directory",
 ]
 
 
-def setup_scratch_directory(input_files, base_scratch_dir="/scratch/johannal96/tmp"):
+def scratch_dir_for(run_dir, base_scratch_dir):
+    """Scratch location used for run_dir: <base>/<parent folder name>/<run folder name>."""
     base_scratch_dir = base_scratch_dir or "/tmp/electrofit_scratch"
     base_scratch_dir = os.path.expanduser(os.path.expandvars(base_scratch_dir))
+    run_dir = os.path.abspath(run_dir)
+    return os.path.join(base_scratch_dir, os.path.basename(os.path.dirname(run_dir)), os.path.basename(run_dir))
+
+
+def setup_scratch_directory(input_files, base_scratch_dir="/scratch/johannal96/tmp"):
     fullpath = os.getcwd()
-    calcdir = os.path.basename(fullpath)
-    parent_dir = os.path.dirname(fullpath)
-    parent_folder_name = os.path.basename(parent_dir)
-    scratch_dir = os.path.join(base_scratch_dir, parent_folder_name, calcdir)
+    scratch_dir = scratch_dir_for(fullpath, base_scratch_dir)
     log_file_path = os.path.join(fullpath, "process.log")
     suppress = any(isinstance(h, logging.FileHandler) for h in logging.getLogger().handlers)
     setup_logging(log_file_path, suppress_initial_message=suppress)

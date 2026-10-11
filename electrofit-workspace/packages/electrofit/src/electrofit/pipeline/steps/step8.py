@@ -29,6 +29,7 @@ def run_step8(
     log_console: bool,
     only_molecule: str | None = None,
     prepare_only: bool = False,
+    resume: bool = False,
 ) -> int:
     enable_header_dedup(True)
     setup_logging(str(project / "step.log"), also_console=log_console, suppress_initial_message=True)
@@ -54,6 +55,7 @@ def run_step8(
             multi_mol,
             override_cfg,
             prepare_only=prepare_only,
+            resume=resume,
         )
         if ok:
             ran += 1
@@ -71,10 +73,16 @@ def main(argv: list[str] | None = None):  # pragma: no cover
     ap.add_argument("--config", help=CONFIG_ARG_HELP)
     ap.add_argument("--log-console", action="store_true", help="Also echo logs to console")
     ap.add_argument("--molecule", help="Only run the specified molecule name", required=False)
-    ap.add_argument(
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
         "--prepare-only",
         action="store_true",
         help="Build the box, solvate, and add ions, then stop before minimization.",
+    )
+    mode.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue interrupted production runs from md.cpt (scratch or run directory).",
     )
     args = ap.parse_args(argv)
     project_root = Path(args.project).resolve()
@@ -85,6 +93,7 @@ def main(argv: list[str] | None = None):  # pragma: no cover
         args.log_console,
         getattr(args, "molecule", None),
         args.prepare_only,
+        args.resume,
     )
     raise SystemExit(rc)
 

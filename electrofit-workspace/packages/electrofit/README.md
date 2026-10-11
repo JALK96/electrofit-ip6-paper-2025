@@ -25,12 +25,12 @@ Every command requires `--project <project_root>` and accepts an optional `--con
 | `step0`      | Scaffold `process/` tree for each molecule under `data/input/`; idempotent copy/normalise. |
 | `step1`      | Initial prep (Gaussian/RESP staging, symmetry JSON, ACPYPE-ready files). Outputs `process/<mol>/run_gau_create_gmx_in/`. |
 | `step2`      | Build `run_gmx_simulation` directories: stage MDPs from `[paths].mdp_dir`, create run manifest, copy topology/start structures. |
-| `step3`      | EM → NVT → NPT → short production MD. Respects `[gmx.runtime]` threads/pin/gpu. Produces `md.gro`, `md_center.xtc`. |
+| `step3`      | EM → NVT → NPT → short production MD. Respects `[gmx.runtime]`. Produces `md.gro`, `md_center.xtc`. |
 | `step4`      | Sample conformers from production trajectory into `extracted_conforms/` using `linear|random|maxmin` frame selection. |
 | `step5`      | Per-conformer Gaussian/RESP pipeline (parallelisable), writes RESP charges per conformer. |
 | `step6`      | Aggregate charges (mean, optional symmetry/group averaging, optional outlier removal), update MOL2/ACPYPE. |
 | `step7`      | Final GROMACS setup using aggregated charges (`run_final_gmx_simulation/`). |
-| `step8`      | Final MD production with aggregated charges. |
+| `step8`      | Final MD production with aggregated charges. `--prepare-only` stops after solvation and ion insertion; `--resume` continues an interrupted production run from `md.cpt`. |
 | `step7remd`  | REMD setup (templates, replica folders, `remd*.tpr`). |
 | `step8remd`  | REMD equilibration + prep, writes `run_remd.sh`; can launch via generated script. |
 
@@ -79,9 +79,15 @@ Fields are merged into nested dataclasses; unknown keys are ignored. Defaults sh
 - `base_scratch_dir` (None): root for scratch working dirs (env vars expanded).
 
 ### [gmx.runtime]
-- `threads` (16): OpenMP threads per `gmx_mpi` rank.
+- `threads` (16): CPU threads per `mdrun` (`-nt`; with `gpu = true`, OpenMP threads of a single rank, `-ntomp`).
 - `pin` (true): CPU pinning flag passed to GROMACS.
-- `gpu` (false): whether to request GPU aware settings in templates (templates must support it).
+- `gpu` (false): run `mdrun` with one rank (`-ntmpi 1`) and nonbonded interactions on the GPU (`-nb gpu`). Requires a CUDA-enabled `gmx`.
+- `gpu_id` (None): GPU device index (`-gpu_id`).
+- `gpu_pme`, `gpu_bonded`, `gpu_update` (`"auto"`): placement of PME, bonded interactions and the coordinate update in MD stages (`"auto"`, `"gpu"` or `"cpu"`). With `"auto"`, GROMACS offloads each task where the stage supports it; energy minimisation always offloads nonbonded interactions only. GROMACS 2025 runs the update on the GPU for the `md` integrator but not for `sd`.
+- `checkpoint_minutes` (None): checkpoint interval of MD stages (`-cpt`); GROMACS writes one every 15 minutes by default. After a crash, `step8 --resume` continues from the last checkpoint.
+- `postprocess_on_scratch` (true): run trajectory centring, `mindist` and `gyrate` after production.
+
+On qcw46 (RTX 4060, GROMACS 2025.3), `gpu = true` with `threads = 8` ran the 13k-atom IP6/NaCl production system at about 500 ns/day (CPU only, 16 threads: 186 ns/day) and the 196k-atom system at 40 ns/day.
 
 ### [simulation.box]
 - `type` (`"dodecahedron"`): supports `dodecahedron` or `cubic` for automatic sizing.
@@ -99,7 +105,9 @@ Fields are merged into nested dataclasses; unknown keys are ignored. Defaults sh
 - Derived summary (ion counts, inferred neutrality, effective molarity, box lengths) is logged via `derive_simulation_settings`.
 
 ### [simulation]
-- `forcefield` (`"amber14sb.ff"`): folder name under `share/gromacs/top` or project-supplied.
+- `forcefield` (`"amber14sb.ff"`): a path to a `.ff` folder, or a bare folder name. A path (absolute, or relative to the project root) is copied into the run directory next to the topology and staged into scratch with it; grompp then uses that copy, and `process.log` records its SHA-256. A bare name is resolved from the GROMACS installation, whose copy is not recorded with the run.
+
+`electrofit-workspace/data/` provides `amber14sb.ff` (the 2015 GROMACS user-contributed ff14SB port, unchanged) and `amber14sb_corrected-Na.ff` (the same with the Joung–Cheatham Na⁺ epsilon; see its README). Both carry Joung–Cheatham Na⁺/K⁺/Cl⁻ and parm99 (Åqvist) Mg²⁺/Ca²⁺ parameters for TIP3P.
 
 ### [remd]
 - `enabled` (false)
@@ -148,6 +156,8 @@ The public entrypoint `python -m electrofit` is equivalent to running the `elect
 ## Logging and scratch
 - Default logging is INFO-level stdout unless a handler is already configured by the caller.
 - Scratch directories are managed by `infra.scratch_manager` under `[paths].base_scratch_dir` (env-expanded); operations are idempotent.
+- On SIGINT/SIGTERM, electrofit waits for running commands before copying scratch back: GROMACS writes a checkpoint and exits (a command still running after 15 s receives one SIGTERM). A signal during the copy-back is handled after the copy completes.
+- A production run interrupted this way leaves `md.cpt` in the run directory; after a crash or reboot the state stays in scratch. `electrofit step8 --resume` continues from either location (`mdrun -cpi`, appending to the existing outputs) and refuses when both hold a checkpoint. A new `step8` run refuses to start over a scratch directory that holds `md.cpt`.
 
 ## Safety and compatibility
 - Legacy `.ef` configs are no longer read; use TOML only.

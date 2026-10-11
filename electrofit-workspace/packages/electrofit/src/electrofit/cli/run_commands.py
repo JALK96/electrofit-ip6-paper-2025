@@ -3,9 +3,22 @@ import os
 import logging
 import subprocess
 import selectors
+import threading
 from contextlib import redirect_stderr, redirect_stdout, contextmanager
 from pathlib import Path
 
+
+
+# Child processes started by run_command that have not finished yet; the signal
+# handler in electrofit.cli.safe_run waits for them before finalizing scratch.
+_ACTIVE: set = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def active_processes() -> list:
+    """Return the still running child processes started by run_command."""
+    with _ACTIVE_LOCK:
+        return [p for p in _ACTIVE if p.poll() is None]
 
 
 def _snapshot(path: str):
@@ -104,6 +117,7 @@ def run_command(command, cwd=None):
     else:
         raise TypeError("command must be str or list, not %r" % type(command))
 
+    process = None
     try:
         logging.info(f"Executing command: {log_cmd}")
 
@@ -125,6 +139,8 @@ def run_command(command, cwd=None):
             cwd=cwd,
             bufsize=1,  # line-buffered in text mode
         )
+        with _ACTIVE_LOCK:
+            _ACTIVE.add(process)
 
         output_lines: list[str] = []
         stderr_accum: list[str] = []
@@ -186,6 +202,10 @@ def run_command(command, cwd=None):
     except Exception as e:
         logging.error(f"Unexpected error running {log_cmd}: {e}")
         raise
+    finally:
+        if process is not None:
+            with _ACTIVE_LOCK:
+                _ACTIVE.discard(process)
 
 def run_and_log(func, *args, log_level=logging.INFO, **kwargs):
     """

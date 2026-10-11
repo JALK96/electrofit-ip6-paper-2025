@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import logging
@@ -283,26 +284,39 @@ def validate_forcefield(forcefield: str, explicit: bool) -> None:
         logging.info("[ff] Validated forcefield '%s' in %s", forcefield, top)
 
 
-# ---- Installation of path-provided forcefields into GMX top ---------------------
+# ---- Run-local staging of path-provided forcefields ------------------------------
 
-def _conda_top_dir() -> Optional[str]:
-    """Return $CONDA_PREFIX/share/gromacs/top if it exists; else fall back to locate_gmx_topdir()."""
-    cprefix = os.environ.get("CONDA_PREFIX")
-    if cprefix:
-        top = os.path.join(cprefix, "share", "gromacs", "top")
-        if os.path.isdir(top):
-            return top
-    return locate_gmx_topdir()
+_REQUIRED_FF_FILES = ("forcefield.itp", "tip3p.itp", "ions.itp")
 
 
-def ensure_forcefield_installed(ff_path: str) -> str:
-    """Ensure a '.ff' directory from a path is available under the active GMX 'top' directory.
+def is_forcefield_path(forcefield: str) -> bool:
+    """True if the configured forcefield is a path rather than a bare '<name>.ff'."""
+    return isinstance(forcefield, str) and (
+        os.path.isabs(forcefield) or os.sep in forcefield or forcefield.startswith(".")
+    )
 
-    - ff_path may be absolute or relative ("~/...", "./...", or project-local path).
-    - Verifies required files exist in the source folder.
-    - Copies into <top>/<ff_name> if missing. Returns the short name (e.g. 'amber14sb.ff').
 
-    Raises FileNotFoundError, ValueError, or PermissionError with helpful messages.
+def forcefield_digest(ff_dir: str) -> str:
+    """SHA-256 over the relative path and content hash of every file in a '.ff' directory."""
+    digest = hashlib.sha256()
+    for root, dirs, files in os.walk(ff_dir):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            digest.update(os.path.relpath(path, ff_dir).encode() + b"\0")
+            with open(path, "rb") as handle:
+                digest.update(hashlib.sha256(handle.read()).digest())
+    return digest.hexdigest()
+
+
+def stage_forcefield(ff_path: str, dest_dir: str) -> str:
+    """Copy a '.ff' directory next to the topology in dest_dir and return its name.
+
+    grompp resolves ``#include "<name>.ff/..."`` in the topology's directory before
+    the GROMACS installation, so the staged copy defines the parameters even if a
+    folder of the same name is installed with GROMACS. The copy travels with the
+    run inputs into scratch. An existing copy in dest_dir is reused only if its
+    content is identical to the source.
     """
     src = os.path.expanduser(os.path.expandvars(ff_path))
     if not os.path.isdir(src):
@@ -310,25 +324,19 @@ def ensure_forcefield_installed(ff_path: str) -> str:
     ff_name = os.path.basename(src.rstrip(os.sep))
     if not ff_name.endswith(".ff"):
         raise ValueError(f"[ff] Expected a '.ff' directory, got: {ff_name}")
-
-    # Basic sanity: ensure core files exist
-    required = ("forcefield.itp", "tip3p.itp", "ions.itp")
-    missing = [p for p in required if not os.path.isfile(os.path.join(src, p))]
+    missing = [p for p in _REQUIRED_FF_FILES if not os.path.isfile(os.path.join(src, p))]
     if missing:
         raise FileNotFoundError(f"[ff] Missing files in {src}: {', '.join(missing)}")
 
-    top = _conda_top_dir()
-    if not top:
-        raise FileNotFoundError(
-            "[ff] Could not resolve GROMACS 'top' directory. Ensure CONDA_PREFIX is set or GMXDATA configured."
-        )
-    dest = os.path.join(top, ff_name)
+    digest = forcefield_digest(src)
+    dest = os.path.join(dest_dir, ff_name)
     if os.path.isdir(dest):
-        logging.info("[ff] '%s' already available in %s", ff_name, top)
-        return ff_name
-    try:
+        if forcefield_digest(dest) != digest:
+            raise ValueError(
+                f"[ff] {dest} differs from {src}; remove it or use a new run directory "
+                "so one run does not mix force-field versions"
+            )
+    else:
         shutil.copytree(src, dest)
-        logging.info("[ff] Copied '%s' -> %s", src, dest)
-    except Exception as e:
-        raise PermissionError(f"[ff] Failed to install '{ff_name}' into '{top}': {e}") from e
+    logging.info("[ff] Staged '%s' from %s into %s (sha256 %s)", ff_name, src, dest_dir, digest)
     return ff_name

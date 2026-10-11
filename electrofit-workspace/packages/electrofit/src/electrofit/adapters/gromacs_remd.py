@@ -154,6 +154,8 @@ def set_up_remd(
     remove_defaults_section_lines(m_top)
 
     input_items = [m_gro, m_itp, m_top, m_posres, MDP_dir]
+    if os.path.isdir(ff):
+        input_items.append(ff)
     scratch_dir, original_dir = setup_scratch_directory(input_items, base_scratch_dir)
 
     with ensure_finalized(original_dir=original_dir, scratch_dir=scratch_dir, input_files=input_items):

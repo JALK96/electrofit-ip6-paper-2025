@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from electrofit.config.loader import load_config, dump_config
 from electrofit.adapters.gromacs import set_up_production
-from electrofit.io.ff import validate_forcefield, ensure_forcefield_installed
+from electrofit.io.ff import is_forcefield_path, stage_forcefield, validate_forcefield
 from electrofit.infra.config_snapshot import compose_snapshot, CONFIG_ARG_HELP
 from electrofit.infra.logging import setup_logging, reset_logging, log_run_header, enable_header_dedup
 from electrofit.infra.step_logging import log_relevant_config
@@ -100,6 +100,10 @@ def main():  # pragma: no cover
                     "gmx.runtime.threads",
                     "gmx.runtime.pin",
                     "gmx.runtime.gpu",
+                    "gmx.runtime.gpu_id",
+                    "gmx.runtime.gpu_pme",
+                    "gmx.runtime.gpu_bonded",
+                    "gmx.runtime.gpu_update",
                     "paths.base_scratch_dir",
                     "simulation.box.type",
                     "simulation.box.edge_nm",
@@ -115,12 +119,13 @@ def main():  # pragma: no cover
         sim = getattr(cfg_run, "simulation", None)
         ff_attr = getattr(sim, "forcefield", None) if sim else None
         ff_raw = ff_attr or "amber14sb.ff"
-        # If a path was specified, ensure the forcefield exists under the active GMX top
-        # and then always use the short name (e.g., 'amber14sb.ff') in includes.
-        if isinstance(ff_raw, str) and (os.path.isabs(ff_raw) or os.sep in ff_raw or ff_raw.startswith(".")):
+        # A path is staged into the run directory (and from there into scratch), and
+        # topologies include it by folder name; a bare name resolves from GROMACS.
+        staged_ff = is_forcefield_path(ff_raw)
+        if staged_ff:
             ff_abs = ff_raw if os.path.isabs(ff_raw) else os.path.join(str(project_root), ff_raw)
             try:
-                ff = ensure_forcefield_installed(ff_abs)
+                ff = stage_forcefield(ff_abs, str(run_dir))
             except Exception as e:
                 logging.error("[step3][abort] %s", e)
                 print(f"[step3][abort] {e}")
@@ -174,12 +179,13 @@ def main():  # pragma: no cover
                 "[step3][ff] No forcefield specified in config; falling back to default '%s'", ff
             )
         # Validate (raises if user explicitly set a non-existent ff; warns otherwise)
-        try:
-            validate_forcefield(ff, explicit=explicit_ff)
-        except FileNotFoundError as e:
-            logging.error("[step3][abort] %s", e)
-            print(f"[step3][abort] {e}")
-            continue
+        if not staged_ff:
+            try:
+                validate_forcefield(ff, explicit=explicit_ff)
+            except FileNotFoundError as e:
+                logging.error("[step3][abort] %s", e)
+                print(f"[step3][abort] {e}")
+                continue
         logging.info(f"[step3] Starting GROMACS production for {molecule} in {run_dir}")
         prev = os.getcwd()
         try:
@@ -195,6 +201,11 @@ def main():  # pragma: no cover
                 threads=threads,
                 pin=pin,
                 gpu=getattr(runtime_local, "gpu", None) if runtime_local else None,
+                gpu_id=getattr(runtime_local, "gpu_id", None),
+                gpu_pme=getattr(runtime_local, "gpu_pme", "auto"),
+                gpu_bonded=getattr(runtime_local, "gpu_bonded", "auto"),
+                gpu_update=getattr(runtime_local, "gpu_update", "auto"),
+                checkpoint_minutes=getattr(runtime_local, "checkpoint_minutes", None),
             )
             ran += 1
 

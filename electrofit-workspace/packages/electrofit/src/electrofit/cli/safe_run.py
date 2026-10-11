@@ -33,7 +33,9 @@ Typical usage in a step module after creating the scratch directory:
         ... do the work ...
 
 The global cleanup is invoked automatically on normal exit, Ctrl+C, or SIGTERM.
-It is idempotent and safe to call multiple times.
+On a signal it first waits for commands started by run_command to exit (GROMACS
+writes its checkpoint), so the copied-back files are complete. It is idempotent
+and safe to call multiple times.
 """
 from __future__ import annotations
 
@@ -190,9 +192,106 @@ def _cleanup(reason: str = "atexit") -> None:
     _state.mark_cleaned()
 
 
+def _signal_process_tree(proc, signum) -> None:
+    """Send signum to a child started by run_command and to its descendants.
+
+    Commands run through a shell, so the GROMACS process can be a grandchild.
+    """
+    targets = []
+    try:
+        import psutil
+
+        targets = psutil.Process(proc.pid).children(recursive=True)
+    except Exception:
+        pass
+    for target in targets:
+        try:
+            target.send_signal(signum)
+        except Exception:
+            pass
+    try:
+        proc.send_signal(signum)
+    except Exception:
+        pass
+
+
+def _wait_draining(procs, timeout: float) -> None:
+    """Wait until procs exit, discarding their output so they cannot block on full pipes."""
+    import os
+    import select
+    import time
+
+    fds = set()
+    for p in procs:
+        for stream in (p.stdout, p.stderr):
+            try:
+                if stream is not None and not stream.closed:
+                    fds.add(stream.fileno())
+            except Exception:
+                pass
+    deadline = time.monotonic() + timeout
+    while any(p.poll() is None for p in procs) and time.monotonic() < deadline:
+        if not fds:
+            time.sleep(0.5)
+            continue
+        try:
+            readable = select.select(list(fds), [], [], 0.5)[0]
+        except Exception:
+            readable = []
+        for fd in readable:
+            try:
+                if not os.read(fd, 65536):
+                    fds.discard(fd)
+            except Exception:
+                fds.discard(fd)
+
+
+def _stop_running_commands(grace: float = 15.0, term_wait: float = 120.0) -> None:
+    """Let commands started by run_command exit before scratch is finalized.
+
+    A terminal interrupt also reaches the children (same process group); GROMACS
+    then writes a checkpoint and exits. Children still running after ``grace``
+    seconds, for example when only this process was signalled, receive one
+    SIGTERM, and SIGKILL after ``term_wait`` more seconds.
+    """
+    try:
+        from electrofit.cli.run_commands import active_processes
+
+        procs = active_processes()
+    except Exception:
+        return
+    if not procs:
+        return
+    _wait_draining(procs, grace)
+    remaining = [p for p in procs if p.poll() is None]
+    for proc in remaining:
+        _signal_process_tree(proc, signal.SIGTERM)
+    _wait_draining(remaining, term_wait)
+    for proc in remaining:
+        if proc.poll() is None:
+            _signal_process_tree(proc, signal.SIGKILL)
+
+
+_handling_signal = False
+# A signal that arrives while ensure_finalized copies scratch back is handled after
+# the copy completes, so the run directory never holds half-copied files.
+_finalizing = False
+_pending_signal = None
+
+
 def _signal_handler(signum, frame):  # type: ignore[no-untyped-def]
-    # Perform cleanup then exit with proper signal semantics.
+    # Wait for running commands, perform cleanup, then exit with proper signal
+    # semantics. Further signals during this bounded wait are ignored.
+    global _handling_signal, _pending_signal
+    if _finalizing:
+        if _pending_signal is None:
+            _pending_signal = signum
+        return
+    if _handling_signal:
+        return
+    _handling_signal = True
     name = {getattr(signal, k): k for k in ("SIGINT", "SIGTERM")}.get(signum, str(signum))
+    _stop_running_commands()
     _cleanup(reason=name)
     # Re-raise default behavior after cleanup for proper exit status
     signal.signal(signum, signal.SIG_DFL)
@@ -216,8 +315,10 @@ def ensure_finalized(
 
     This also registers the scratch with the global handlers as a safety net.
     When the block exits, we pop and finalize this one explicitly, so the
-    global cleanup (if it later runs) won't re-finalize it.
+    global cleanup (if it later runs) won't re-finalize it. SIGINT/SIGTERM
+    received during that copy-back is handled once the copy has completed.
     """
+    global _finalizing
     try:
         sys.stderr.write(f"[ensure-finalized-enter] scratch={scratch_dir} orig={original_dir}\n")
     except Exception:
@@ -247,11 +348,17 @@ def ensure_finalized(
                 sys.stderr.write(f"[ensure-finalized-finalize-start] scratch={scratch_dir}\n")
             except Exception:
                 pass
-            _finalize_one(reg, reason="context-exit")
+            _finalizing = True
+            try:
+                _finalize_one(reg, reason="context-exit")
+            finally:
+                _finalizing = False
             try:
                 sys.stderr.write(f"[ensure-finalized-finalize-done] scratch={scratch_dir}\n")
             except Exception:
                 pass
+            if _pending_signal is not None:
+                _signal_handler(_pending_signal, None)
 
 
 # Register atexit cleanup once on import

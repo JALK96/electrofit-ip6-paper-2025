@@ -10,8 +10,8 @@ from typing import Tuple, Iterable
 
 from electrofit.config.loader import load_config, dump_config
 from electrofit.infra.config_snapshot import compose_snapshot
-from electrofit.io.ff import ensure_forcefield_installed
-from electrofit.adapters.gromacs import set_up_production
+from electrofit.io.ff import is_forcefield_path, stage_forcefield
+from electrofit.adapters.gromacs import resume_production, set_up_production
 
 __all__ = [
     "prepare_final_sim_directory",
@@ -36,6 +36,18 @@ def _mdp_run_subdir_name(cfg) -> str:
         return "MDP"
     name = Path(mdp_dir_setting).name
     return name or "MDP"
+
+
+def _input_gro(run_dir: Path) -> str | None:
+    """Name of the input structure: the .gro with a matching .itp and .top.
+
+    Run directories of interrupted runs also hold stage outputs such as em_steep.gro.
+    """
+    gros = sorted(f for f in run_dir.iterdir() if f.suffix == ".gro")
+    for gro in gros:
+        if gro.with_suffix(".itp").is_file() and gro.with_suffix(".top").is_file():
+            return gro.name
+    return gros[0].name if gros else None
 
 
 def prepare_final_sim_directory(
@@ -112,8 +124,9 @@ def launch_final_sim_run(
     multi_mol: bool,
     override_cfg: Path | None,
     prepare_only: bool = False,
+    resume: bool = False,
 ) -> Tuple[bool, str]:
-    """Launch final production simulation in an existing prepared directory."""
+    """Launch, or with ``resume`` continue, the production simulation in a prepared directory."""
     mol = run_dir.parent.name
     compose_snapshot(
         run_dir,
@@ -130,7 +143,7 @@ def launch_final_sim_run(
     )
     cfg = load_config(project_root, context_dir=run_dir, molecule_name=mol)
     dump_config(cfg, log_fn=logging.debug)
-    gro = next((f.name for f in run_dir.iterdir() if f.suffix == ".gro"), None)
+    gro = _input_gro(run_dir)
     if not gro:
         logging.info(f"[step8][skip] {run_dir}: no .gro file")
         return False, "no gro"
@@ -155,33 +168,60 @@ def launch_final_sim_run(
     runtime = cfg.gmx.runtime
     ff_attr = getattr(sim, 'forcefield', None)
     ff_raw = ff_attr or "amber14sb.ff"
-    if isinstance(ff_raw, str) and (os.path.isabs(ff_raw) or os.sep in ff_raw or ff_raw.startswith(".")):
+    if is_forcefield_path(ff_raw):
         ff_abs = ff_raw if os.path.isabs(ff_raw) else os.path.join(str(project_root), ff_raw)
-        try:
-            ff = ensure_forcefield_installed(ff_abs)
-        except Exception as e:
-            logging.error("[step8][abort] %s", e)
-            return False, f"forcefield error: {e}"
+        if resume:
+            ff = os.path.basename(ff_abs.rstrip(os.sep))
+        else:
+            try:
+                ff = stage_forcefield(ff_abs, str(run_dir))
+            except Exception as e:
+                logging.error("[step8][abort] %s", e)
+                return False, f"forcefield error: {e}"
     else:
         ff = ff_raw
+        logging.warning(
+            "[step8][ff] Force field '%s' is given by name and is resolved from the GROMACS "
+            "installation, whose copy is not recorded with the run. Give a path to stage a copy.",
+            ff,
+        )
     import os as _os
     prev = _os.getcwd()
     try:
         _os.chdir(run_dir)
-        set_up_production(
-            m_gro=gro,
-            MDP_dir=mdp_dir,
-            base_scratch_dir=cfg.paths.base_scratch_dir or "/tmp/electrofit_scratch",
-            molecule_name=cfg.project.molecule_name or mol,
-            simulation=cfg.simulation,
-            derived=getattr(cfg.simulation, 'derived', None),
-            ff=ff,
+        resources = dict(
             threads=runtime.threads,
             pin=runtime.pin,
             gpu=runtime.gpu,
+            gpu_id=runtime.gpu_id,
+            gpu_pme=runtime.gpu_pme,
+            gpu_bonded=runtime.gpu_bonded,
+            gpu_update=runtime.gpu_update,
+            checkpoint_minutes=runtime.checkpoint_minutes,
             postprocess_on_scratch=getattr(runtime, "postprocess_on_scratch", True),
-            prepare_only=prepare_only,
         )
+        base_scratch = cfg.paths.base_scratch_dir or "/tmp/electrofit_scratch"
+        if resume:
+            try:
+                if not resume_production(gro, mdp_dir, base_scratch, ff=ff, **resources):
+                    print(f"[step8][resume] {run_dir}: production already complete")
+                    return False, "production already complete"
+            except (FileNotFoundError, RuntimeError) as e:
+                logging.error("[step8][resume] %s", e)
+                print(f"[step8][resume] {run_dir}: {e}")
+                return False, str(e)
+        else:
+            set_up_production(
+                m_gro=gro,
+                MDP_dir=mdp_dir,
+                base_scratch_dir=base_scratch,
+                molecule_name=cfg.project.molecule_name or mol,
+                simulation=cfg.simulation,
+                derived=getattr(cfg.simulation, 'derived', None),
+                ff=ff,
+                prepare_only=prepare_only,
+                **resources,
+            )
     finally:
         _os.chdir(prev)
     return True, "ok"
