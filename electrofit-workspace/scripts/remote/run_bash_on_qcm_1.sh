@@ -7,11 +7,11 @@ set -e
 # Configuration and Setup
 # -----------------------------
 
-# Bestimme das Verzeichnis, in dem dieses Skript liegt
+# Resolve the script directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Name of the Bash script to execute
-BASH_SCRIPT="/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/scripts/run/run_all_1.sh"
+BASH_SCRIPT="$SCRIPT_DIR/../run/run_all_1.sh"
 echo "Bash Script: $BASH_SCRIPT"
 
 # ------------ ---------------- ------------- -----------
@@ -25,7 +25,7 @@ SCREEN_SESSION="$(basename "$(dirname "$SCRIPT_DIR")")_$(date +%Y%m%d%H%M%S)"
 echo "Screen Session Name: $SCREEN_SESSION"
 
 # Name of the conda environment to use
-CONDA_ENV="electrofit"
+CONDA_ENV="${CONDA_ENV:-$HOME/PhD/software/envs/electrofit-dev}"
 echo "Conda Environment: $CONDA_ENV"
 
 # -----------------------------
@@ -33,7 +33,7 @@ echo "Conda Environment: $CONDA_ENV"
 # -----------------------------
 
 # Define the log file (placed in the same directory as the script)
-LOG_FILE="$SCRIPT_DIR/process.log"
+LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/process.log}"
 
 # Function to log messages with timestamps
 log() {
@@ -78,6 +78,7 @@ execute_ssh_command() {
 
 SSH_COMMAND="cd \"$SCRIPT_DIR\" && \
 screen -dmS \"$SCREEN_SESSION\" bash -lc '
+  set -e;
   source \"$HOME/miniconda3/etc/profile.d/conda.sh\";
   conda activate $CONDA_ENV;
   echo \"[INFO] Using python: \$(which python)\";

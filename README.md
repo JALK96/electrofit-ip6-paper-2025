@@ -1,57 +1,49 @@
-# electrofit-ip6-paper-2025
+# ElectroFit software and starting inputs
 
-This repository contains the code to reproduce the
-IP6 parameterization and subsequent analyses presented in the 2025 paper ....
+Reusable parameterization and analysis source, with IP6 starting inputs.
+The repository name is retained for now; it does not identify a published paper.
 
-- Primary code lives in: `electrofit-workspace/`
-- See `envs/` for conda environments
-- Usage instructions: see below
+- `electrofit-workspace/packages/electrofit/`: parameterization implementation.
+- `electrofit-workspace/packages/ip6-analysis/`: analysis implementation.
+- `electrofit-workspace/{scripts,envs,docs,tests,data,examples}/`: supporting code,
+  environment definitions, documentation, tests and reusable input/example files.
+- `ip6-project/data/`: microstate inputs and MDP templates to copy into a fresh
+  study run. See [parameterization steps](ip6-project/README.md).
+- `notebooks/`: existing trajectory exploration notebook; its historical data
+  paths need selecting or repairing for each study. `traj_vis_env.yml` describes
+  its environment.
 
-## Quickstart
+Keep simulation outputs in the consuming study, outside this source checkout.
+Historical outputs and manuscripts remain in their original study/publication
+locations and are not part of this working tree.
 
-Clone the repository,
-
-```bash
-git clone https://github.com/JALK96/electrofit-ip6-paper-2025.git
-```
-
-change directory:
-
-```bash
-cd electrofit-ip6-paper-2025/electrofit-workspace
-```
-
-and install via mamba:
+## Working environment
 
 ```bash
-mamba env create -f envs/electrofit-analysis.yml
-conda activate electrofit-analysis
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+conda activate /home/johannal96/PhD/software/envs/electrofit-dev
+electrofit --help
+ip6-analysis --help
 ```
 
-or using conda only:
+This development environment uses editable packages from this checkout. The
+existing `electrofit-analysis` environment also uses these packages. The legacy
+`electrofit` environment uses only ElectroFit from this checkout. Source edits
+apply to subsequent commands in all environments using the edited package. Keep recorded production builds
+separate. Gaussian, AmberTools/ACPYPE and GROMACS compatibility must be checked
+for the intended host before running a full parameterization or MD workflow.
+
+Dependency versions are recorded in
+`electrofit-workspace/envs/electrofit-dev.lock.yml`. To create a separate working
+environment, run from `electrofit-workspace/`:
 
 ```bash
-conda env create -f envs/electrofit-analysis.yml
-conda activate electrofit-analysis
+conda env create --prefix /path/to/new-env --file envs/electrofit-dev.lock.yml
+conda activate /path/to/new-env
+python -m pip install --no-deps -e ./packages/electrofit -e ./packages/ip6-analysis
 ```
 
-If you only plan on using the package to parameterize your own set of partial charges, you can install:
-
-```bash
-conda env create -f envs/electrofit.yml
-conda activate electrofit
-```
-
-If you prefer to install electrofit in an existing environment, you can do so by running:
-
-```bash
-pip install -e ./packages/electrofit
-```
-
-and optionally
-
-```bash 
-pip install -e ./packages/ip6-analysis
-```
-
-to install the IP6 analysis package, to reproduce the analysis... (to be continued). 
+The sparse checkout includes software, notebooks and starting inputs. Inspect
+its selection with `git sparse-checkout list`. Keep simulation outputs in the
+consuming study; `scripts/run/run_all_*.sh` accept `PROJECT` and `CACHE` overrides.
+Use `DRY_RUN=1` to inspect those command sequences.

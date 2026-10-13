@@ -1,15 +1,20 @@
 #!/bin/bash
+set -euo pipefail
 
-PROJECT="/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration"
-CACHE="/home/johannal96/Publications.nobackup/2025/electrofit-ip6-paper-2025/electrofit-workspace/tests/integration/cache"
+WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+PROJECT="${PROJECT:-$WORKSPACE/tests/integration}"
+CACHE="${CACHE:-$WORKSPACE/tests/integration/cache}"
 MOLECULE_NAME="IP_011101"
 
 run_step() {
     echo ">>> Running: $*"
-    "$@"
-    status=$?
+    if [[ "${DRY_RUN:-0}" == 1 ]]; then printf '%q ' "$@"; printf '\n'; return; fi
+    status=0
+    "$@" || status=$?
     if [ $status -ne 0 ]; then
-        echo "!!! Step failed with exit code $status"
+        echo "!!! Step failed with exit code $status" >&2
+        return "$status"
     fi
     echo "------------------------------------"
 }
