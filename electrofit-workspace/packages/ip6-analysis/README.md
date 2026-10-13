@@ -5,7 +5,19 @@ This package provides the `ip6-analysis` CLI (`electrofit_analysis.cli.app`).
 ### `ip6-analysis coordination`
 
 Runs an explicit coordination/count analysis (boolean tensor + per-phosphate counts)
-and produces RDF plots for ion–peripheral oxygen distances.
+and produces RDF plots for ion–phosphate-site distances.
+
+#### Distance basis
+
+Use `--coord-distance-basis` to choose the coordination distance definition:
+
+- `oxygen` (default): 3 terminal oxygen atoms per phosphate.
+- `phosphorus`: phosphorus center atom per phosphate (direct ion–P mode).
+
+Compatibility constraints in `phosphorus` mode:
+
+- `--rdf-oxygen-mode` must be `pooled`.
+- `--rdf-scale` must be `raw`.
 
 #### Ion selection
 
@@ -45,6 +57,18 @@ The explicit coordination/count algorithm needs a cutoff radius (nm).
 When global modes are enabled, it is recommended to also provide `-m/--molecule` to avoid
 mixing unrelated microstates within the same `process/` tree.
 
+#### Output naming / compatibility
+
+Coordination tensors are written with basis + cutoff suffixes, for example:
+
+- `IonP_coordination_bool_oxygen_0p3200nm.npy`
+- `IonP_contacts_bool_oxygen_0p3200nm.npy`
+- `IonP_nearest_bool_oxygen_0p3200nm.npy`
+- `IonP_coordination_bool_phosphorus_0p3200nm.npy`
+
+Legacy unsuffixed aliases are written only in oxygen mode when the cutoff is
+unambiguous (single-cutoff run), to preserve old workflows.
+
 #### RDF plots
 
 RDF plotting options:
@@ -53,3 +77,13 @@ RDF plotting options:
 - `--rdf-cutoff-mode fixed|first-shell`: controls the RDF integration/guide used for the
   coordination number displayed in the RDF panels.
 
+### `ip6-analysis summarize-nap` (coordination input resolution)
+
+For coordination summaries, bool tensors are resolved in this order:
+
+1. `--coord-bool-name` explicit override (if provided),
+2. `IonP_coordination_bool_<basis>_*.npy`,
+3. `IonP_nearest_bool_<basis>_*.npy`,
+4. oxygen legacy fallback: `IonP_coordination_bool.npy` then `IonP_nearest_bool.npy`.
+
+Use `--coord-distance-basis {oxygen,phosphorus}` to select the auto-discovery basis.

@@ -5,8 +5,10 @@ Na_IP6_coordination.py (CLI)
 Iterates micro-state folders under a project's process directory and computes
 coordination counts per phosphate using a *nearest-phosphate* assignment:
 
-- For each ion and frame, compute the minimum distance to the 3 peripheral
-  oxygens of each phosphate group.
+- For each ion and frame, compute the minimum distance to the selected
+  coordination site basis of each phosphate group:
+  - oxygen basis: 3 terminal oxygens per phosphate
+  - phosphorus basis: phosphorus center atom per phosphate
 - Assign the ion to the single phosphate with the smallest such distance,
   provided that this minimum distance is below the cutoff.
 
@@ -15,7 +17,7 @@ time-series counts and plotted.
 
 Optionally, an additional *non-exclusive contacts* tensor can be written, where
 an ion can be in contact with multiple phosphates in the same frame (any
-phosphate with min(peripheral-O) distance < cutoff).
+phosphate with min(site-distance) < cutoff).
 
 CLI usage:
     python -m electrofit_analysis.cli.coordination.Na_IP6_coordination \
@@ -55,6 +57,14 @@ from electrofit_analysis.viz.coord_helpers import (
     plot_rdf_periphO_Na,
     first_shell_end,
     )
+from electrofit_analysis.structure.util.coordination_sites import (
+    CoordDistanceBasis,
+    PHOS_LABELS,
+    normalize_coord_distance_basis,
+    rdf_curve_tag,
+    site_atom_names_by_basis,
+    select_phosphate_site_atomgroups,
+)
 
 import seaborn as sns
 from electrofit_analysis.cli.common import (
@@ -80,6 +90,8 @@ RDF_CURVES_CSV     = "rdf_periphO_curves.csv"      # plotted RDF data points
 RDF_SUMMARY_CSV    = "rdf_periphO_summary.csv"     # per-phosphate RDF/CN summary
 RDF_CURVES_OXY_CSV = "rdf_periphO_curves_per_oxygen.csv"
 RDF_SUMMARY_OXY_CSV = "rdf_periphO_summary_per_oxygen.csv"
+RDF_CURVES_P_CSV = "rdf_P_curves.csv"
+RDF_SUMMARY_P_CSV = "rdf_P_summary.csv"
 
 
 def _rdf_scale_factor(rdf_scale: Literal["raw", "per-phosphate"], n_oxygen_sites: int = 3) -> float:
@@ -109,9 +121,17 @@ def _cutoff_tag(cutoff_nm: float) -> str:
     return f"{float(cutoff_nm):.4f}".replace(".", "p") + "nm"
 
 
+def _basis_cutoff_label(basis: CoordDistanceBasis, cutoff_nm: float) -> str:
+    return f"{basis}_{_cutoff_tag(cutoff_nm)}"
+
+
 def _with_suffix(path: pathlib.Path, suffix: str) -> pathlib.Path:
     """Insert suffix before extension: file.ext -> file_<suffix>.ext."""
     return path.with_name(f"{path.stem}_{suffix}{path.suffix}")
+
+
+def _with_basis_and_cutoff(path: pathlib.Path, basis: CoordDistanceBasis, cutoff_nm: float) -> pathlib.Path:
+    return _with_suffix(path, _basis_cutoff_label(basis, cutoff_nm))
 
 
 def _backup_existing_file(path: pathlib.Path, overwrite: bool) -> None:
@@ -171,20 +191,81 @@ def _link_or_copy_bool_tensor(src: pathlib.Path, dst: pathlib.Path) -> None:
 
     shutil.copyfile(src, dst)
 
-# Mapping: phosphate → peripheral O atom names (no ester O)
-PHOS_OXYGENS: Dict[str, Tuple[str, ...]] = {
-    "P" : ("O6",  "O7",  "O8"),
-    "P1": ("O9",  "O10", "O11"),
-    "P2": ("O12", "O13", "O14"),
-    "P3": ("O15", "O16", "O17"),
-    "P4": ("O18", "O19", "O20"),
-    "P5": ("O21", "O22", "O23"),
-}
-PHOS_LABELS = tuple(PHOS_OXYGENS.keys())   # ('P', 'P1', …)
-PHOS_LABELS_CORRECTED = ('P1', 'P2', 'P3', 'P4', 'P5', 'P6')  # re-order to match the paper
+
+def _write_legacy_unsuffixed_aliases(
+    *,
+    dest_dir: pathlib.Path,
+    basis: CoordDistanceBasis,
+    cutoff_values: Sequence[float],
+    bool_path_by_cutoff: dict[float, pathlib.Path],
+    contacts_path_by_cutoff: dict[float, pathlib.Path],
+    overwrite: bool,
+) -> None:
+    """
+    Write unsuffixed legacy aliases only for oxygen mode when cutoff is unambiguous.
+    """
+    if basis != "oxygen":
+        return
+    if len(cutoff_values) != 1:
+        logging.info(
+            "Skipping unsuffixed legacy aliases for oxygen mode because multiple cutoffs are present."
+        )
+        return
+
+    cutoff = float(cutoff_values[0])
+    src_bool = bool_path_by_cutoff.get(cutoff)
+    src_contacts = contacts_path_by_cutoff.get(cutoff)
+    if src_bool is None or src_contacts is None:
+        return
+
+    for src, dst_name in (
+        (src_bool, BOOL_FILENAME),
+        (src_bool, NEAREST_BOOL_ALIAS),
+        (src_contacts, CONTACTS_FILENAME),
+    ):
+        dst = dest_dir / dst_name
+        _backup_existing_file(dst, overwrite=overwrite)
+        _link_or_copy_bool_tensor(src, dst)
+        logging.info("Wrote legacy alias %s -> %s", dst.name, src.name)
 
 # Set logging level
 LOGLEVEL = logging.INFO
+
+
+def _compute_min_site_distances(
+    ion_positions: np.ndarray,
+    site_groups: dict[str, mda.core.groups.AtomGroup],
+    labels: Sequence[str],
+    box,
+) -> np.ndarray:
+    """
+    Return min ion-site distances in Angstrom with shape (n_ions, n_phosphates).
+    """
+    n_ions = int(ion_positions.shape[0])
+    n_phos = len(labels)
+    min_dists = np.full((n_ions, n_phos), np.inf, dtype=np.float32)
+    for j, label in enumerate(labels):
+        d = distance_array(ion_positions, site_groups[label].positions, box=box)
+        min_dists[:, j] = d.min(axis=1)
+    return min_dists
+
+
+def _assignment_from_min_dists(
+    min_dists: np.ndarray,
+    cutoff_a: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    From min distances matrix return:
+      - closest phosphate index per ion
+      - nearest-assignment mask below cutoff
+      - non-exclusive contacts matrix below cutoff
+    """
+    closest_idx = np.argmin(min_dists, axis=1)
+    closest_dist = min_dists[np.arange(min_dists.shape[0]), closest_idx]
+    nearest_mask = closest_dist < cutoff_a
+    contacts_mask = min_dists < cutoff_a
+    return closest_idx, nearest_mask, contacts_mask
+
 
 # ╔═══════════════════════════════════════════════════════════════╗
 # ┃              CORE ANALYSIS ── ONE MICRO-STATE                ┃
@@ -204,6 +285,7 @@ def analyse_one_microstate(
         rdf_norm: Literal["rdf", "density", "none"] = "rdf",
         rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
         rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"] = "pooled",
+        coord_distance_basis: CoordDistanceBasis = "oxygen",
         skip_rdf: bool = False,
         overwrite: bool = False,
         ion_name: str = "NA",
@@ -218,6 +300,16 @@ def analyse_one_microstate(
 
     # ── Load MD trajectory ───────────────────────────────────
     ion_name = ion_name.upper()
+    basis = normalize_coord_distance_basis(coord_distance_basis)
+    if basis == "phosphorus":
+        if rdf_oxygen_mode != "pooled":
+            raise ValueError(
+                "coord_distance_basis='phosphorus' does not support --rdf-oxygen-mode per-oxygen/both."
+            )
+        if rdf_scale != "raw":
+            raise ValueError(
+                "coord_distance_basis='phosphorus' does not support --rdf-scale per-phosphate."
+            )
     ion_label = ion_label or f"{ion_name}⁺"
     u = mda.Universe(top_file.as_posix(), traj_file.as_posix())
     na_atoms = u.select_atoms(f"name {ion_name}")
@@ -232,18 +324,17 @@ def analyse_one_microstate(
         logging.info("RDF normalization mode: %s", rdf_norm)
         logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
         logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
+    logging.info("Coordination distance basis: %s", basis)
 
-    phos_ag = {p: u.select_atoms("resname I* and name " + " ".join(names))
-               for p, names in PHOS_OXYGENS.items()}
+    phos_ag = select_phosphate_site_atomgroups(u, basis)
+    site_names_map = site_atom_names_by_basis(basis)
 
     # Sanity-check selections
     for p, ag in phos_ag.items():
-        if len(ag) != 3:
-            raise ValueError(f"Expected 3 peripheral O atoms for {p}, got {len(ag)}")
         logging.info(
-            "[RDF setup] %s: O names=%s | O indices=%s | O ids=%s",
+            "[RDF setup] %s: site names=%s | site indices=%s | site ids=%s",
             p,
-            ",".join(PHOS_OXYGENS[p]),
+            ",".join(site_names_map[p]),
             ",".join(map(str, ag.indices.tolist())),
             ",".join(map(str, ag.ids.tolist())),
         )
@@ -259,8 +350,8 @@ def analyse_one_microstate(
     if not skip_rdf:
         if precomputed_rdf is None:
             rdf_results = {}
-            for label, oxy_ag in phos_ag.items():
-                rdf = InterRDF(oxy_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
+            for label, site_ag in phos_ag.items():
+                rdf = InterRDF(site_ag, na_atoms, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
                 rdf.run()
                 rdf_results[label] = (rdf.results.bins / 10.0, rdf.results.rdf)  # Å → nm
                 if mean_box_volume_nm3_from_rdf is None:
@@ -269,9 +360,10 @@ def analyse_one_microstate(
                     if vol_cum is not None and n_frames_rdf:
                         mean_box_volume_nm3_from_rdf = float(vol_cum / n_frames_rdf) / 1000.0
                 logging.info(
-                    "[RDF setup] Computing InterRDF for %s: n_O=%d vs n_%s=%d, range=[0, %.2f] nm, nbins=%d",
+                    "[RDF setup] Computing InterRDF for %s (%s basis): n_site=%d vs n_%s=%d, range=[0, %.2f] nm, nbins=%d",
                     label,
-                    len(oxy_ag),
+                    basis,
+                    len(site_ag),
                     ion_name.upper(),
                     len(na_atoms),
                     r_max_nm,
@@ -312,7 +404,7 @@ def analyse_one_microstate(
     elif len(cutoffs_nm) > 1 and cutoff_source == "fixed (CLI)":
         cutoff_source = "fixed (CLI multi-cutoff)"
 
-    cutoff_labels = {cutoff: _cutoff_tag(cutoff) for cutoff in cutoffs_nm}
+    cutoff_labels = {cutoff: _basis_cutoff_label(basis, cutoff) for cutoff in cutoffs_nm}
     logging.info(
         "Coordination cutoff(s) used for counts: %s (%s)",
         ", ".join(f"{cutoff:.4f} nm" for cutoff in cutoffs_nm),
@@ -380,26 +472,25 @@ def analyse_one_microstate(
 
     for k, ts in enumerate(u.trajectory):
         na_pos = na_atoms.positions               # (N_Na, 3)
-        min_dists = np.full((n_na, n_phos), np.inf, dtype=np.float32)
+        min_dists = _compute_min_site_distances(
+            ion_positions=na_pos,
+            site_groups=phos_ag,
+            labels=PHOS_LABELS,
+            box=ts.dimensions,
+        )
         volume_sum_nm3 += float(np.prod(ts.dimensions[:3]) / 1000.0)  # Å^3 -> nm^3
         volume_samples += 1
 
-        # Compute per-phosphate minimum distances Naᵢ ↔ O_peripheral
-        for j, p in enumerate(PHOS_LABELS):
-            d = distance_array(na_pos, phos_ag[p].positions, box=ts.dimensions)  # (N_Na, 3)
-            min_dists[:, j] = d.min(axis=1)   # (N_Na,)
-
-        # For each Na, find closest phosphate (index of min along axis=1)
-        closest_phos_idx = np.argmin(min_dists, axis=1)           # (N_Na,)
-        closest_dist     = min_dists[np.arange(n_na), closest_phos_idx]
-
         for cutoff in cutoffs_nm:
             threshold_a = cutoff * 10.0  # nm -> Å
-            coordin_mask = closest_dist < threshold_a
+            closest_phos_idx, coordin_mask, contacts_mask = _assignment_from_min_dists(
+                min_dists=min_dists,
+                cutoff_a=threshold_a,
+            )
 
             if SAVE_3D_BOOL:
                 coord_mem_by_cutoff[cutoff][np.arange(n_na), closest_phos_idx, k] = coordin_mask
-                contacts_mem_by_cutoff[cutoff][:, :, k] = min_dists < threshold_a
+                contacts_mem_by_cutoff[cutoff][:, :, k] = contacts_mask
 
             counts_ts = counts_ts_by_cutoff[cutoff]
             for j in range(n_phos):
@@ -434,6 +525,17 @@ def analyse_one_microstate(
                 logging.info("Wrote alias tensor name %s -> %s", nearest_alias_path.name, bool_path.name)
             except Exception:
                 logging.exception("Failed to create alias %s for %s", nearest_alias_path, bool_path)
+        try:
+            _write_legacy_unsuffixed_aliases(
+                dest_dir=dest_dir,
+                basis=basis,
+                cutoff_values=cutoffs_nm,
+                bool_path_by_cutoff=bool_path_by_cutoff,
+                contacts_path_by_cutoff=contacts_path_by_cutoff,
+                overwrite=overwrite,
+            )
+        except Exception:
+            logging.exception("Failed to create legacy unsuffixed aliases for %s.", dest_dir)
 
     for cutoff in cutoffs_nm:
         cutoff_label = cutoff_labels[cutoff]
@@ -499,7 +601,13 @@ def analyse_one_microstate(
             snapshot_png = _with_suffix(dest_dir / "network_frame_3d.png", cutoff_label)
             _backup_existing_file(snapshot_png, overwrite=overwrite)
             plot_frame_network_3d_fixed_view(
-                u, frame=521, out_png=snapshot_png, r_cut_nm=cutoff, ion_name=ion_name, ion_label=ion_label
+                u,
+                frame=521,
+                out_png=snapshot_png,
+                r_cut_nm=cutoff,
+                ion_name=ion_name,
+                ion_label=ion_label,
+                coord_distance_basis=basis,
             )
             snapshot_png = _with_suffix(dest_dir / "network_frame.png", cutoff_label)
             _backup_existing_file(snapshot_png, overwrite=overwrite)
@@ -507,17 +615,23 @@ def analyse_one_microstate(
                 u, frame=525, out_png=snapshot_png,
                 reference_triplet=("C", "C2", "C4"), r_cut_nm=cutoff,
                 ion_name=ion_name, ion_label=ion_label,
+                coord_distance_basis=basis,
             )
 
     if not skip_rdf:
         y_for_plot = rdf_y_max_global if rdf_y_max_global is not None else 1800.0
+        curve_tag = rdf_curve_tag(basis)
         for cutoff in cutoffs_nm:
             cutoff_label = cutoff_labels[cutoff]
             for mode in _rdf_plot_modes(rdf_oxygen_mode):
                 if mode == "pooled":
-                    rdf_png = _with_suffix(dest_dir / f"rdf_{ion_name.upper()}_periphO.pdf", cutoff_label)
-                    rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_CSV, cutoff_label)
-                    rdf_summary_csv = _with_suffix(dest_dir / RDF_SUMMARY_CSV, cutoff_label)
+                    rdf_png = _with_suffix(dest_dir / f"rdf_{ion_name.upper()}_{curve_tag}.pdf", cutoff_label)
+                    if basis == "oxygen":
+                        rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_CSV, cutoff_label)
+                        rdf_summary_csv = _with_suffix(dest_dir / RDF_SUMMARY_CSV, cutoff_label)
+                    else:
+                        rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_P_CSV, cutoff_label)
+                        rdf_summary_csv = _with_suffix(dest_dir / RDF_SUMMARY_P_CSV, cutoff_label)
                 else:
                     rdf_png = _with_suffix(dest_dir / f"rdf_{ion_name.upper()}_periphO_per_oxygen.pdf", cutoff_label)
                     rdf_curve_csv = _with_suffix(dest_dir / RDF_CURVES_OXY_CSV, cutoff_label)
@@ -539,6 +653,7 @@ def analyse_one_microstate(
                     rdf_norm=rdf_norm,
                     rdf_scale=rdf_scale,
                     rdf_oxygen_mode=mode,
+                    coord_distance_basis=basis,
                     ion_name=ion_name,
                     ion_label=ion_label,
                     ion_density_nm3=ion_density_nm3,
@@ -567,6 +682,7 @@ def main(
     rdf_norm: Literal["rdf", "density", "none"] = "rdf",
     rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
     rdf_oxygen_mode: Literal["pooled", "per-oxygen", "both"] = "pooled",
+    coord_distance_basis: CoordDistanceBasis = "oxygen",
     rdf_show_first_shell: bool = False,
     rdf_cutoff_mode: str = "fixed",
     project_mode: str = "auto",
@@ -637,12 +753,23 @@ def main(
     run_dir_name, analyze_base = resolve_stage(stage)
     only_norm = {normalize_micro_name(x) for x in only} if only else None
     ion_name = ion_name.upper()
+    coord_distance_basis = normalize_coord_distance_basis(coord_distance_basis)
     rdf_norm = rdf_norm.lower()
     ion_label = f"{ion_name}⁺"
     scale_factor = _rdf_scale_factor(rdf_scale)
+    if coord_distance_basis == "phosphorus":
+        if rdf_oxygen_mode in {"per-oxygen", "both"}:
+            raise ValueError(
+                "coord_distance_basis='phosphorus' is incompatible with --rdf-oxygen-mode per-oxygen/both."
+            )
+        if rdf_scale != "raw":
+            raise ValueError(
+                "coord_distance_basis='phosphorus' is incompatible with --rdf-scale per-phosphate. Use --rdf-scale raw."
+            )
     logging.info("RDF normalization mode: %s", rdf_norm)
     logging.info("RDF plotting scale: %s", _rdf_scale_description(rdf_scale))
     logging.info("RDF oxygen mode: %s", rdf_oxygen_mode)
+    logging.info("Coordination distance basis: %s", coord_distance_basis)
     logging.info("Skip RDF: %s", skip_rdf)
     logging.info("Overwrite outputs: %s", overwrite)
 
@@ -767,6 +894,16 @@ def main(
                 rdf_cache_arrays = None
                 Y_GLOBAL_MAX = None
                 cached_data = {}
+            cached_basis = str(meta.get("coord_distance_basis", "oxygen")).strip().lower()
+            if cached_data and cached_basis != coord_distance_basis:
+                logging.warning(
+                    "RDF cache basis was '%s' but current run uses '%s'. Ignoring cache.",
+                    cached_basis,
+                    coord_distance_basis,
+                )
+                rdf_cache_arrays = None
+                Y_GLOBAL_MAX = None
+                cached_data = {}
             cached_scale = meta.get("rdf_scale")
             if cached_data and cached_scale and cached_scale != rdf_scale:
                 logging.info(
@@ -833,7 +970,7 @@ def main(
         # 1.  loop over all micro-state directories
         # -----------------------------------------------------------------------
         for proj, microstate, traj, top, dest_dir in iter_microstates():
-            dest_dir.mkdir(exist_ok=True)
+            dest_dir.mkdir(parents=True, exist_ok=True)
             logfile = dest_dir / "IonP_coordination.log"
             _backup_existing_file(logfile, overwrite=overwrite)
             setup_logging(logfile)
@@ -844,10 +981,12 @@ def main(
                 logging.warning("No %s atoms in %s – skipped.", ion_label, microstate.name)
                 continue
 
+            site_ag_by_label = select_phosphate_site_atomgroups(u, coord_distance_basis)
+            site_names_by_label = site_atom_names_by_basis(coord_distance_basis)
             micro_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
             for label in PHOS_LABELS:
-                oxy_ag = u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-                rdf = InterRDF(oxy_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
+                site_ag = site_ag_by_label[label]
+                rdf = InterRDF(site_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
                 rdf.run()
 
                 r_nm = rdf.results.bins / 10.0
@@ -856,10 +995,16 @@ def main(
 
                 if determine_global_y and rdf_y_max is None and Y_GLOBAL_MAX is not None:
                     peak_height = float((g_raw * scale_factor).max())
-                    if rdf_oxygen_mode in {"per-oxygen", "both"}:
-                        for oxygen_index in oxy_ag.indices.tolist():
-                            oxygen_ag = u.atoms[[int(oxygen_index)]]
-                            rdf_single = InterRDF(oxygen_ag, ion_ag, range=(0, r_max_nm * 10), nbins=nbins, norm=rdf_norm)
+                    if coord_distance_basis == "oxygen" and rdf_oxygen_mode in {"per-oxygen", "both"}:
+                        for oxygen_name in site_names_by_label[label]:
+                            oxygen_ag = u.select_atoms(f"resname I* and name {oxygen_name}")
+                            rdf_single = InterRDF(
+                                oxygen_ag,
+                                ion_ag,
+                                range=(0, r_max_nm * 10),
+                                nbins=nbins,
+                                norm=rdf_norm,
+                            )
                             rdf_single.run()
                             peak_height = max(peak_height, float((rdf_single.results.rdf * scale_factor).max()))
                     Y_GLOBAL_MAX = max(Y_GLOBAL_MAX, peak_height)
@@ -905,6 +1050,7 @@ def main(
                     "rdf_norm": rdf_norm,
                     "rdf_scale": rdf_scale,
                     "rdf_oxygen_mode": rdf_oxygen_mode,
+                    "coord_distance_basis": coord_distance_basis,
                     "project_mode": project_mode,
                     "subdir": subdir,
                     "stage": stage,
@@ -937,7 +1083,7 @@ def main(
             logging.warning("No global y-limit determined; falling back to default = 1800.0")
 
     for proj, microstate, traj, top, dest_dir in iter_microstates():
-        dest_dir.mkdir(exist_ok=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
         logfile = dest_dir / "IonP_coordination.log"
         _backup_existing_file(logfile, overwrite=overwrite)
         setup_logging(logfile)
@@ -975,6 +1121,7 @@ def main(
             rdf_norm = rdf_norm,
             rdf_scale = rdf_scale,
             rdf_oxygen_mode = rdf_oxygen_mode,
+            coord_distance_basis = coord_distance_basis,
             skip_rdf = skip_rdf,
             overwrite = overwrite,
             ion_name = ion_name,
@@ -1069,6 +1216,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--coord-distance-basis",
+        choices=["oxygen", "phosphorus"],
+        default="oxygen",
+        help=(
+            "Distance basis for coordination/contact assignment: oxygen "
+            "(3 terminal O per phosphate, default) or phosphorus (P center per phosphate)."
+        ),
+    )
+    parser.add_argument(
         "--rdf-show-first-shell",
         action="store_true",
         help="Draw a dotted line at the RDF first-shell end (first minimum after first peak).",
@@ -1125,6 +1281,7 @@ if __name__ == "__main__":
         rdf_norm=args.rdf_norm,
         rdf_scale=args.rdf_scale,
         rdf_oxygen_mode=args.rdf_oxygen_mode,
+        coord_distance_basis=args.coord_distance_basis,
         rdf_show_first_shell=args.rdf_show_first_shell,
         rdf_cutoff_mode=args.rdf_cutoff_mode,
         project_mode=args.project_mode,

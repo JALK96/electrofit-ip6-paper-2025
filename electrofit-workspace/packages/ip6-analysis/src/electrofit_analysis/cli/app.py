@@ -118,6 +118,8 @@ def _cmd_summarize_nap(args: argparse.Namespace) -> None:
         plots=plots,
         coord_plots=coord_plots,
         stage=getattr(args, 'stage', 'final'),
+        coord_distance_basis=getattr(args, "coord_distance_basis", "oxygen"),
+        coord_bool_name=getattr(args, "coord_bool_name", None),
     )
 
 
@@ -149,6 +151,7 @@ def _cmd_coordination(args: argparse.Namespace) -> None:
         rdf_norm=getattr(args, 'rdf_norm', 'rdf'),
         rdf_scale=getattr(args, 'rdf_scale', 'per-phosphate'),
         rdf_oxygen_mode=getattr(args, 'rdf_oxygen_mode', 'pooled'),
+        coord_distance_basis=getattr(args, 'coord_distance_basis', 'oxygen'),
         rdf_show_first_shell=getattr(args, 'rdf_show_first_shell', False),
         rdf_cutoff_mode=getattr(args, 'rdf_cutoff_mode', 'fixed'),
         project_mode=getattr(args, 'project_mode', 'auto'),
@@ -329,7 +332,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_sum.add_argument(
         "--coordination", action="store_true",
-        help="Generate coordination summaries (requires: IonP_coordination_bool.npy)."
+        help=(
+            "Generate coordination summaries (requires basis-aware coordination bool tensor files "
+            "under IonP_coordination/)."
+        )
     )
 
     # NEW: plot-type toggles
@@ -346,6 +352,24 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["final", "sample", "remd"],
         default="final",
         help="Read from analyze_final_sim, analyze_sample_sim, or analyze_remd_sim.",
+    )
+    p_sum.add_argument(
+        "--coord-distance-basis",
+        choices=["oxygen", "phosphorus"],
+        default="oxygen",
+        help=(
+            "Select which coordination tensor basis summarize-nap should auto-discover "
+            "(default: oxygen)."
+        ),
+    )
+    p_sum.add_argument(
+        "--coord-bool-name",
+        default=None,
+        help=(
+            "Explicit coordination bool tensor filename override (for example "
+            "IonP_coordination_bool_oxygen_0p3200nm.npy). If set, this takes precedence "
+            "over basis auto-discovery."
+        ),
     )
 
     p_sum.set_defaults(func=_cmd_summarize_nap)
@@ -458,6 +482,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "RDF oxygen grouping for plots/CSV: pooled (default), per-oxygen (3 curves per phosphate), "
             "or both (write both output sets)."
+        ),
+    )
+    p_coord.add_argument(
+        "--coord-distance-basis",
+        choices=["oxygen", "phosphorus"],
+        default="oxygen",
+        help=(
+            "Distance basis for coordination/contact assignment. oxygen (default) uses terminal O sites; "
+            "phosphorus uses P centers. phosphorus mode is only compatible with "
+            "--rdf-oxygen-mode pooled and --rdf-scale raw."
         ),
     )
     p_coord.add_argument(

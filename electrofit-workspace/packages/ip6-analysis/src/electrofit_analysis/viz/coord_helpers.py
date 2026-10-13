@@ -17,21 +17,17 @@ import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from typing import Optional
 from mpl_toolkits.mplot3d import Axes3D
+from electrofit_analysis.structure.util.coordination_sites import (
+    CoordDistanceBasis,
+    PHOS_LABELS,
+    PHOS_LABELS_CORRECTED,
+    normalize_coord_distance_basis,
+    site_atom_names_by_basis,
+    select_phosphate_site_atomgroups,
+)
 sns.set_context("talk")
 
 RCUTOFF_NM         = 0.3       # coordination threshold  (change if desired)
-
-# Mapping: phosphate → peripheral O atom names (no ester O)
-PHOS_OXYGENS: Dict[str, Tuple[str, ...]] = {
-    "P" : ("O6",  "O7",  "O8"),
-    "P1": ("O9",  "O10", "O11"),
-    "P2": ("O12", "O13", "O14"),
-    "P3": ("O15", "O16", "O17"),
-    "P4": ("O18", "O19", "O20"),
-    "P5": ("O21", "O22", "O23"),
-}
-PHOS_LABELS = tuple(PHOS_OXYGENS.keys())   # ('P', 'P1', …)
-PHOS_LABELS_CORRECTED = ('P1', 'P2', 'P3', 'P4', 'P5', 'P6')  # re-order to match the paper
 
 
 def _oxygen_label_one_based(oxygen_name: str) -> str:
@@ -478,6 +474,7 @@ def plot_rdf_periphO_Na(
         rdf_norm: Literal["rdf", "density", "none"] = "rdf",
         rdf_scale: Literal["raw", "per-phosphate"] = "per-phosphate",
         rdf_oxygen_mode: Literal["pooled", "per-oxygen"] = "pooled",
+        coord_distance_basis: CoordDistanceBasis = "oxygen",
         ion_name: str = "NA",
         ion_label: Optional[str] = None,
         ion_density_nm3: Optional[float] = None,
@@ -485,7 +482,7 @@ def plot_rdf_periphO_Na(
         rdf_curve_csv: Optional[pathlib.Path] = None,
         rdf_summary_csv: Optional[pathlib.Path] = None,
 ) -> None:
-    """Plot ion–peripheral‑oxygen RDFs for one microstate.
+    """Plot basis-aware ion–phosphate RDFs for one microstate.
 
     Parameters are as before, with additions:
     - ``rdf_norm``:
@@ -498,6 +495,7 @@ def plot_rdf_periphO_Na(
     - ``rdf_oxygen_mode``:
       - ``pooled`` -> one RDF curve per phosphate using all three terminal O atoms.
       - ``per-oxygen`` -> three RDF curves per phosphate (one per terminal oxygen).
+      In `coord_distance_basis='phosphorus'`, only `pooled` is valid.
     - ``ion_density_nm3`` and ``mean_volume_nm3`` can be supplied by caller for
       transparent logging and reproducible CN integration metadata.
     - ``rdf_curve_csv`` and ``rdf_summary_csv`` optionally save all plotted RDF
@@ -511,9 +509,21 @@ def plot_rdf_periphO_Na(
         raise ValueError(f"Unsupported rdf_scale '{rdf_scale}'")
     if rdf_oxygen_mode not in {"pooled", "per-oxygen"}:
         raise ValueError(f"Unsupported rdf_oxygen_mode '{rdf_oxygen_mode}'")
+    basis = normalize_coord_distance_basis(coord_distance_basis)
+    if basis == "phosphorus":
+        if rdf_oxygen_mode != "pooled":
+            raise ValueError(
+                "coord_distance_basis='phosphorus' only supports --rdf-oxygen-mode pooled."
+            )
+        if rdf_scale != "raw":
+            raise ValueError(
+                "coord_distance_basis='phosphorus' only supports --rdf-scale raw."
+            )
 
     ion_label = ion_label or f"{ion_name.upper()}⁺"
     scale_desc = "raw (per oxygen)" if rdf_scale == "raw" else "per-phosphate (raw × 3)"
+    site_mode_desc = "terminal oxygens" if basis == "oxygen" else "phosphorus centers"
+    site_names_map = site_atom_names_by_basis(basis)
 
     font_rc = {
         "font.family": "serif",
@@ -523,10 +533,7 @@ def plot_rdf_periphO_Na(
     with plt.rc_context(font_rc):
         ion_sel = f"name {ion_name}"
         na_ag = u.select_atoms(ion_sel)
-        periph_dict = {
-            label: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-            for label in PHOS_LABELS
-        }
+        periph_dict = select_phosphate_site_atomgroups(u, basis)
 
         rdf_results: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         rdf_per_oxygen: Dict[str, list[Tuple[str, int, int, np.ndarray, np.ndarray]]] = {}
@@ -556,7 +563,7 @@ def plot_rdf_periphO_Na(
             for label, oxy_ag in periph_dict.items():
                 rows: list[Tuple[str, int, int, np.ndarray, np.ndarray]] = []
                 oxygen_indices = oxy_ag.indices.tolist()
-                for oxygen_name, oxygen_index in zip(PHOS_OXYGENS[label], oxygen_indices):
+                for oxygen_name, oxygen_index in zip(site_names_map[label], oxygen_indices):
                     single_oxygen_ag = u.atoms[[int(oxygen_index)]]
                     rdf_single = InterRDF(single_oxygen_ag, na_ag, range=(0, r_max * 10), nbins=nbins, norm=rdf_norm)
                     rdf_single.run()
@@ -585,12 +592,14 @@ def plot_rdf_periphO_Na(
             ion_density_nm3 = float(len(na_ag) / mean_volume_nm3)
 
         logging.info(
-            "[RDF] ion=%s n_ion=%d norm=%s scale=%s oxygen_mode=%s mean_box_volume=%.3f nm^3 ion_density=%.6f nm^-3",
+            "[RDF] ion=%s n_ion=%d norm=%s scale=%s oxygen_mode=%s basis=%s (%s) mean_box_volume=%.3f nm^3 ion_density=%.6f nm^-3",
             ion_name.upper(),
             len(na_ag),
             rdf_norm,
             scale_desc,
             rdf_oxygen_mode,
+            basis,
+            site_mode_desc,
             float(mean_volume_nm3),
             float(ion_density_nm3) if ion_density_nm3 is not None else float("nan"),
         )
@@ -623,9 +632,9 @@ def plot_rdf_periphO_Na(
             local_y_peak = float(np.max(g_plot))
 
             logging.info(
-                "[RDF] %s <- O_names=%s O_indices=%s O_ids=%s vs %s",
+                "[RDF] %s <- site_names=%s site_indices=%s site_ids=%s vs %s",
                 label,
-                ",".join(PHOS_OXYGENS[label]),
+                ",".join(site_names_map[label]),
                 ",".join(map(str, oxy_ag.indices.tolist())),
                 ",".join(map(str, oxy_ag.ids.tolist())),
                 ion_name.upper(),
@@ -719,6 +728,11 @@ def plot_rdf_periphO_Na(
                                 "rdf_scale": rdf_scale,
                                 "scale_factor": scale_factor,
                                 "rdf_oxygen_mode": rdf_oxygen_mode,
+                                "distance_basis": basis,
+                                "site_names": oxygen_name,
+                                "site_indices": str(oxygen_index),
+                                "site_ids": str(oxygen_id),
+                                "n_site_atoms": 1,
                                 "ion_name": ion_name.upper(),
                             }
                         )
@@ -734,6 +748,10 @@ def plot_rdf_periphO_Na(
                             "rdf_scale": rdf_scale,
                             "scale_factor": scale_factor,
                             "rdf_oxygen_mode": rdf_oxygen_mode,
+                            "distance_basis": basis,
+                            "site_names": oxygen_name,
+                            "site_indices": str(oxygen_index),
+                            "site_ids": str(oxygen_id),
                             "r_peak_raw_nm": float(r_single_arr[np.argmax(g_raw_single_arr)]),
                             "g_peak_raw": float(np.max(g_raw_single_arr)),
                             "r_peak_plot_nm": float(r_single_arr[np.argmax(g_plot_single)]),
@@ -745,6 +763,7 @@ def plot_rdf_periphO_Na(
                             "mean_box_volume_nm3": float(mean_volume_nm3),
                             "n_ions": int(len(na_ag)),
                             "n_oxygen_sites": 1,
+                            "n_site_atoms": 1,
                         }
                     )
                 if oxygen_rows:
@@ -862,6 +881,11 @@ def plot_rdf_periphO_Na(
                             "rdf_scale": rdf_scale,
                             "scale_factor": scale_factor,
                             "rdf_oxygen_mode": rdf_oxygen_mode,
+                            "distance_basis": basis,
+                            "site_names": ",".join(site_names_map[label]),
+                            "site_indices": ",".join(map(str, oxy_ag.indices.tolist())),
+                            "site_ids": ",".join(map(str, oxy_ag.ids.tolist())),
+                            "n_site_atoms": n_ox,
                             "ion_name": ion_name.upper(),
                         }
                     )
@@ -871,13 +895,17 @@ def plot_rdf_periphO_Na(
                     "phosphate": label,
                     "curve_type": "pooled",
                     "oxygen_name": "ALL",
-                    "oxygen_names": ",".join(PHOS_OXYGENS[label]),
+                    "oxygen_names": ",".join(site_names_map[label]),
                     "oxygen_indices": ",".join(map(str, oxy_ag.indices.tolist())),
                     "oxygen_ids": ",".join(map(str, oxy_ag.ids.tolist())),
                     "rdf_norm": rdf_norm,
                     "rdf_scale": rdf_scale,
                     "scale_factor": scale_factor,
                     "rdf_oxygen_mode": rdf_oxygen_mode,
+                    "distance_basis": basis,
+                    "site_names": ",".join(site_names_map[label]),
+                    "site_indices": ",".join(map(str, oxy_ag.indices.tolist())),
+                    "site_ids": ",".join(map(str, oxy_ag.ids.tolist())),
                     "r_peak_raw_nm": float(r[np.argmax(g_raw)]),
                     "g_peak_raw": float(np.max(g_raw)),
                     "r_peak_plot_nm": float(r[np.argmax(g_plot)]),
@@ -889,6 +917,7 @@ def plot_rdf_periphO_Na(
                     "mean_box_volume_nm3": float(mean_volume_nm3),
                     "n_ions": int(len(na_ag)),
                     "n_oxygen_sites": n_ox,
+                    "n_site_atoms": n_ox,
                 }
             )
 
@@ -926,6 +955,11 @@ def plot_rdf_periphO_Na(
                         "rdf_scale",
                         "scale_factor",
                         "rdf_oxygen_mode",
+                        "distance_basis",
+                        "site_names",
+                        "site_indices",
+                        "site_ids",
+                        "n_site_atoms",
                         "ion_name",
                     ],
                 )
@@ -949,6 +983,10 @@ def plot_rdf_periphO_Na(
                         "rdf_scale",
                         "scale_factor",
                         "rdf_oxygen_mode",
+                        "distance_basis",
+                        "site_names",
+                        "site_indices",
+                        "site_ids",
                         "r_peak_raw_nm",
                         "g_peak_raw",
                         "r_peak_plot_nm",
@@ -960,6 +998,7 @@ def plot_rdf_periphO_Na(
                         "mean_box_volume_nm3",
                         "n_ions",
                         "n_oxygen_sites",
+                        "n_site_atoms",
                     ],
                 )
                 writer.writeheader()
@@ -978,6 +1017,7 @@ def plot_frame_network_plane(
         r_cut_nm: float = RCUTOFF_NM,
         ion_name: str = "NA",
         ion_label: Optional[str] = None,
+        coord_distance_basis: CoordDistanceBasis = "oxygen",
 ) -> None:
     """
     Draw a 2-D network diagram of ions and phosphate centres by
@@ -1043,20 +1083,18 @@ def plot_frame_network_plane(
     na_proj   = project(na_atoms.positions)
     phos_proj = project(np.array([phos_atoms[label].position for label in PHOS_LABELS]))
 
-    # compute ion–peripheral-O minimum distances for dashed links
-    periph_ag = {
-        lab: u.select_atoms("resname I* and name " + " ".join(PHOS_OXYGENS[lab]))
-        for lab in PHOS_LABELS
-    }
+    basis = normalize_coord_distance_basis(coord_distance_basis)
+    # compute ion–site minimum distances for dashed links
+    site_ag = select_phosphate_site_atomgroups(u, basis)
     N = len(na_atoms)
-    min_periph = np.full((N, len(PHOS_LABELS)), np.inf, dtype=np.float32)
+    min_site = np.full((N, len(PHOS_LABELS)), np.inf, dtype=np.float32)
     for j, lab in enumerate(PHOS_LABELS):
         d = distance_array(na_atoms.positions,
-                           periph_ag[lab].positions,
+                           site_ag[lab].positions,
                            box=u.dimensions)
-        min_periph[:, j] = d.min(axis=1)
-    closest_idx  = min_periph.argmin(axis=1)
-    closest_dist = min_periph[np.arange(N), closest_idx]
+        min_site[:, j] = d.min(axis=1)
+    closest_idx  = min_site.argmin(axis=1)
+    closest_dist = min_site[np.arange(N), closest_idx]
     r_cut_A = None if r_cut_nm is None else r_cut_nm * 10.0
 
     # 5. plot
@@ -1089,7 +1127,7 @@ def plot_frame_network_plane(
     ax.set_xlabel("e₁ projection / Å")
     ax.set_ylabel("e₂ projection / Å")
     tri = "–".join(reference_triplet)
-    ax.set_title(f"plane ({tri}) – frame {frame}")
+    ax.set_title(f"plane ({tri}) – frame {frame} [{basis}]")
     ax.grid(True, ls=":", lw=0.4)
 
     plt.tight_layout()
@@ -1109,6 +1147,7 @@ def plot_frame_network_3d_fixed_view(
         look_along: int = +1,          # +1 → camera along  +n,  -1 → along –n
         ion_name: str = "NA",
         ion_label: Optional[str] = None,
+        coord_distance_basis: CoordDistanceBasis = "oxygen",
 ) -> None:
     """
     Draw a 3-D snapshot in laboratory coordinates but orient the Matplotlib
@@ -1162,23 +1201,22 @@ def plot_frame_network_3d_fixed_view(
     azim_rad = np.arctan2(n[1], n[0])                  # atan2(y,x)
     azim_deg = np.degrees(azim_rad)
 
-    # ── 4. coordinates (original) & PERIPHERAL-oxygen distances ────
+    # ── 4. coordinates (original) & basis-dependent site distances ────
     na_pos   = na_atoms.positions                       # (N,3) Å
     phos_pos = np.array([phos_atoms[label].position for label in PHOS_LABELS])
 
-    # Build a dict AtomGroup → peripheral Oxygens (three each)
-    periph_ag = {label: u.select_atoms(
-                    "resname I* and name " + " ".join(PHOS_OXYGENS[label]))
-                for label in PHOS_LABELS}
+    basis = normalize_coord_distance_basis(coord_distance_basis)
+    # Build a dict AtomGroup -> site atoms (three O atoms for oxygen basis, one P for phosphorus basis)
+    site_ag = select_phosphate_site_atomgroups(u, basis)
 
-    # matrix of minimum Na–O distances  (N_Na, 6)
-    min_periph = np.full((len(na_atoms), 6), np.inf, dtype=np.float32)
+    # matrix of minimum ion–site distances  (N_Na, 6)
+    min_site = np.full((len(na_atoms), 6), np.inf, dtype=np.float32)
     for j, label in enumerate(PHOS_LABELS):
-        d = distance_array(na_pos, periph_ag[label].positions, box=u.dimensions)
-        min_periph[:, j] = d.min(axis=1)          # min over the three O atoms
+        d = distance_array(na_pos, site_ag[label].positions, box=u.dimensions)
+        min_site[:, j] = d.min(axis=1)          # min over selected site atoms
 
-    closest_idx  = min_periph.argmin(axis=1)                      # phosphate index
-    closest_dist = min_periph[np.arange(len(na_atoms)), closest_idx]
+    closest_idx  = min_site.argmin(axis=1)                      # phosphate index
+    closest_dist = min_site[np.arange(len(na_atoms)), closest_idx]
     r_cut_A      = r_cut_nm * 10.0                                # nm → Å
     # -------------------------------------------------------------------------
 
@@ -1210,7 +1248,7 @@ def plot_frame_network_3d_fixed_view(
     ax.scatter(na_pos[:, 0], na_pos[:, 1], na_pos[:, 2],
                s=15, c="black", marker=".", depthshade=False)
 
-    # dashed connectors — draw *only* if Na is coordinated via peripheral O
+    # dashed connectors — draw only when ion is coordinated via selected basis sites
     for i, (x_i, y_i, z_i) in enumerate(na_pos):
         if closest_dist[i] > r_cut_A:
             continue                    # not coordinated → no line
@@ -1236,7 +1274,7 @@ def plot_frame_network_3d_fixed_view(
 
 
     #ax.set_title(f"3-D Na–phosphate network (frame {frame})")
-    ax.set_title(f"frame: {frame}", fontsize=14, loc="left")
+    ax.set_title(f"frame: {frame} [{basis}]", fontsize=14, loc="left")
     fig.savefig(out_png, dpi=300)
     plt.close(fig)
     logging.info("Fixed-view 3-D snapshot written to %s  (elev %.1f°, azim %.1f°)",

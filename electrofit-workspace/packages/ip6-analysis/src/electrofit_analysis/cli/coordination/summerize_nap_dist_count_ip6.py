@@ -37,7 +37,9 @@ Requires:
 
 import os
 import argparse
+import glob
 from electrofit_analysis.cli.common import resolve_stage
+from electrofit_analysis.structure.util.coordination_sites import normalize_coord_distance_basis
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -89,8 +91,78 @@ def load_bool_counts(npy_path):
         return [np.array([]) for _ in range(6)]
 
 
+def _resolve_coord_bool_file(
+    root_dir: str,
+    pattern: str,
+    analyze_base: str,
+    *,
+    coord_distance_basis: str = "oxygen",
+    coord_bool_name: str | None = None,
+) -> str:
+    """
+    Resolve the coordination bool tensor for one microstate/pattern.
+
+    Resolution order:
+    1. Explicit override (--coord-bool-name), if provided.
+    2. Canonical basis-specific name: IonP_coordination_bool_<basis>_*.npy
+    3. Basis-specific nearest alias: IonP_nearest_bool_<basis>_*.npy
+    4. Legacy oxygen unsuffixed fallback:
+       IonP_coordination_bool.npy, then IonP_nearest_bool.npy
+    """
+    basis = normalize_coord_distance_basis(coord_distance_basis)
+    coord_dir = os.path.join(root_dir, f"IP_{pattern}", analyze_base, "IonP_coordination")
+
+    if coord_bool_name:
+        explicit = os.path.join(coord_dir, coord_bool_name)
+        if not os.path.isfile(explicit):
+            raise FileNotFoundError(
+                f"Requested coordination bool file not found for pattern {pattern}: {explicit}"
+            )
+        return explicit
+
+    canonical = sorted(glob.glob(os.path.join(coord_dir, f"IonP_coordination_bool_{basis}_*.npy")))
+    if len(canonical) == 1:
+        return canonical[0]
+    if len(canonical) > 1:
+        rels = ", ".join(os.path.basename(p) for p in canonical)
+        raise FileNotFoundError(
+            f"Ambiguous coordination bool files for pattern {pattern} basis={basis}: {rels}. "
+            "Provide --coord-bool-name to disambiguate."
+        )
+
+    nearest = sorted(glob.glob(os.path.join(coord_dir, f"IonP_nearest_bool_{basis}_*.npy")))
+    if len(nearest) == 1:
+        return nearest[0]
+    if len(nearest) > 1:
+        rels = ", ".join(os.path.basename(p) for p in nearest)
+        raise FileNotFoundError(
+            f"Ambiguous nearest-bool files for pattern {pattern} basis={basis}: {rels}. "
+            "Provide --coord-bool-name to disambiguate."
+        )
+
+    if basis == "oxygen":
+        for legacy_name in ("IonP_coordination_bool.npy", "IonP_nearest_bool.npy"):
+            legacy_path = os.path.join(coord_dir, legacy_name)
+            if os.path.isfile(legacy_path):
+                return legacy_path
+
+    raise FileNotFoundError(
+        "No coordination bool tensor found for pattern "
+        f"{pattern} (basis={basis}) in {coord_dir}. "
+        "Expected IonP_coordination_bool_<basis>_<cutoff>.npy (or alias)."
+    )
+
+
 # --- NEW: write stats for coordination ---
-def write_stats_coord(root_dir, output_dir, analyze_base: str, metric_name="coordcount"):
+def write_stats_coord(
+    root_dir,
+    output_dir,
+    analyze_base: str,
+    metric_name="coordcount",
+    *,
+    coord_distance_basis: str = "oxygen",
+    coord_bool_name: str | None = None,
+):
     """
     Compute mean and std for each pattern and phosphate from Boolean coordination
     tensor (IonP_coordination_bool.npy) and save to <output_dir>/<metric_name>_stats.xvg.
@@ -100,9 +172,17 @@ def write_stats_coord(root_dir, output_dir, analyze_base: str, metric_name="coor
 
     for group, patterns in GROUPS.items():
         for pat in patterns:
-            npy_path = os.path.join(
-                root_dir, f"IP_{pat}", analyze_base, "IonP_coordination", "IonP_coordination_bool.npy"
-            )
+            try:
+                npy_path = _resolve_coord_bool_file(
+                    root_dir,
+                    pat,
+                    analyze_base,
+                    coord_distance_basis=coord_distance_basis,
+                    coord_bool_name=coord_bool_name,
+                )
+            except FileNotFoundError as exc:
+                print(f"[WARN] {exc}")
+                npy_path = ""
             arrs = load_bool_counts(npy_path)
             stats = []
             for arr in arrs:
@@ -414,12 +494,28 @@ def run_count(root_dir, output_dir, plots, analyze_base: str):
         write_stats(root_dir, output_dir, analyze_base, "count", "ion_count_P", suf)
 
 
-def run_coordination(root_dir, output_dir, plots, analyze_base: str):
+def run_coordination(
+    root_dir,
+    output_dir,
+    plots,
+    analyze_base: str,
+    *,
+    coord_distance_basis: str = "oxygen",
+    coord_bool_name: str | None = None,
+):
     """Run selected plot types for coordination metric."""
     def _coord_loader(pattern, _root=root_dir):
-        npy_path = os.path.join(_root, f"IP_{pattern}", analyze_base, "IonP_coordination", "IonP_coordination_bool.npy")
-        if not os.path.isfile(npy_path):
-            print(f"[WARN] Boolean tensor not found for pattern {pattern}: {npy_path}")
+        try:
+            npy_path = _resolve_coord_bool_file(
+                _root,
+                pattern,
+                analyze_base,
+                coord_distance_basis=coord_distance_basis,
+                coord_bool_name=coord_bool_name,
+            )
+        except FileNotFoundError as exc:
+            print(f"[WARN] {exc}")
+            npy_path = ""
         arrs = load_bool_counts(npy_path)
         if all(a.size == 0 for a in arrs):
             print(f"[WARN] EMPTY coord data for {pattern}: {npy_path}")
@@ -428,12 +524,30 @@ def run_coordination(root_dir, output_dir, plots, analyze_base: str):
     if "box" in plots:
         summarize_boxplot_generic(root_dir, output_dir, metric_name="coordcount", ylabel="Na⁺ count (coordination)", data_loader=_coord_loader, showfliers=True)
     if "stats" in plots:
-        write_stats_coord(root_dir, output_dir, analyze_base, metric_name="coordcount")
+        write_stats_coord(
+            root_dir,
+            output_dir,
+            analyze_base,
+            metric_name="coordcount",
+            coord_distance_basis=coord_distance_basis,
+            coord_bool_name=coord_bool_name,
+        )
 
 
 # ------------------------ Main -------------------------------------------------
 
-def main(root_dir, output_dir, do_distance, do_count, do_coord, plots, coord_plots, stage: str = 'final'):
+def main(
+    root_dir,
+    output_dir,
+    do_distance,
+    do_count,
+    do_coord,
+    plots,
+    coord_plots,
+    stage: str = 'final',
+    coord_distance_basis: str = "oxygen",
+    coord_bool_name: str | None = None,
+):
     os.makedirs(output_dir, exist_ok=True)
 
     # If none selected, run all (backward-compatible default)
@@ -448,7 +562,14 @@ def main(root_dir, output_dir, do_distance, do_count, do_coord, plots, coord_plo
     if do_count:
         run_count(root_dir, output_dir, plots, analyze_base)
     if do_coord:
-        run_coordination(root_dir, output_dir, coord_plots, analyze_base)
+        run_coordination(
+            root_dir,
+            output_dir,
+            coord_plots,
+            analyze_base,
+            coord_distance_basis=coord_distance_basis,
+            coord_bool_name=coord_bool_name,
+        )
 
 
 if __name__ == "__main__":
@@ -478,6 +599,20 @@ if __name__ == "__main__":
         "--coord-plots", default="box",
         help="Comma-separated list of plot types for coordination. Choices: box,stats. Default: box."
     )
+    parser.add_argument(
+        "--coord-distance-basis",
+        choices=["oxygen", "phosphorus"],
+        default="oxygen",
+        help="Coordination distance basis used for bool tensor auto-discovery (default: oxygen).",
+    )
+    parser.add_argument(
+        "--coord-bool-name",
+        default=None,
+        help=(
+            "Explicit bool tensor filename override for coordination summaries, e.g. "
+            "IonP_coordination_bool_oxygen_0p3200nm.npy."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -501,4 +636,6 @@ if __name__ == "__main__":
         do_coord=args.coordination,
         plots=plots,
         coord_plots=coord_plots,
+        coord_distance_basis=args.coord_distance_basis,
+        coord_bool_name=args.coord_bool_name,
     )
