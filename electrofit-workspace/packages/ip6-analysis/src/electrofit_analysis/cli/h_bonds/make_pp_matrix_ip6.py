@@ -362,10 +362,10 @@ def draw_phosphorus_diagram(
         _draw_edge_list([(u, v)])
         _draw_edge_list([(v, u)])
 
-    # 8) Second‐tier (red — per your current code)
+    # 8) Second-tier elements (red).
     _draw_edge_list(edges_second)
 
-    # 9) Third‐tier (red — per your current code)
+    # 9) Third-tier elements (red).
     _draw_edge_list(edges_third)
     # --- self-loops outside each node, aligned with outward vector ---
     for (n, _n) in self_loops:

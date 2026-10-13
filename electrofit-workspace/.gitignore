@@ -13,6 +13,7 @@ build/
 # Test dummy data (exclude large or generated fixtures)
 tests/dummy_data/
 examples/methane-opt
+examples/**/process.log
 
 # Ignore any process directory anywhere in the repo
 **/process/

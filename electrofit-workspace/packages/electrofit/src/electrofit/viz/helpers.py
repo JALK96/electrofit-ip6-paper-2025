@@ -1,14 +1,13 @@
-"""Visualisierungs-Hilfsfunktionen (umgezogen aus ``electrofit.plotting.helpers``).
+"""Plot atomic charges and symmetry-group charge distributions.
 
-Diese Datei konsolidiert die zuvor im veralteten Namespace ``electrofit.plotting``
-liegenden Funktionen. Importiere künftig direkt über ``electrofit.viz`` bzw.
-``electrofit.viz.helpers``.
+Import these functions from ``electrofit.viz`` or ``electrofit.viz.helpers``.
+Matplotlib is required at runtime.
 """
 
 import os
 import re
 import logging
-import matplotlib.pyplot as plt  # Hard dependency: removed lazy/skip logic
+import matplotlib.pyplot as plt
 import numpy as np
 import logging
 
@@ -27,11 +26,11 @@ __all__ = [
 ELEMENT_RE = re.compile(r"^([A-Z][a-z]?)(\d*)")
 
 
-## Removed _import_matplotlib: we now require matplotlib at runtime. Any ImportError should surface.
+# Missing Matplotlib raises ImportError rather than skipping requested plots.
 
 
 def _write_avg_charges(base_dir: str, filename: str, avg1, avg2=None) -> None:
-    """Hilfsfunktion (Task 1) zum Schreiben der durchschnittlichen Ladungen."""
+    """Write mean atomic charges, optionally followed by a second set."""
     path = os.path.join(base_dir, filename)
     with open(path, "w") as f:
         for v in avg1:

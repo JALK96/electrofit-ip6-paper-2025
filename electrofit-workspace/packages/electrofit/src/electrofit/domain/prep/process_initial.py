@@ -194,14 +194,9 @@ def _write_charges_file(path: str, charges: list[float]) -> None:
 
 
 def process_initial(cfg: InitialPrepConfig, scratch_dir: str, original_dir: str, input_files: list[str], run_acpype=_run_acpype_real) -> InitialResult:
-    # Ensure residue name normalization (legacy behaviour) before any downstream tool consumption.
-    # Previously this happened in the legacy shim unconditionally; during refactor it was only kept there.
-    # Re-introduce here so new callers using domain API directly still obtain consistent residue naming.
-    # Ensure both scratch copy and (optionally) original are normalized so downstream
-    # ACPYPE/GROMACS topology carries the intended residue tag. Previously normalization
-    # happened pre-scratch in the legacy shim; after refactor it ran only on the original
-    # file, leaving the scratch copy stale. We now normalize the scratch file explicitly
-    # (and original as best-effort) to restore prior guarantees.
+    # Normalize the scratch MOL2 before ACPYPE/GROMACS reads it so generated
+    # topologies use the configured residue name. Also normalize the original
+    # file when available; changing it alone would leave the scratch input stale.
     try:
         scratch_mol2 = os.path.join(scratch_dir, cfg.mol2_file)
         if os.path.isfile(scratch_mol2):

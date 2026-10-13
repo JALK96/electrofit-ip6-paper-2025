@@ -1,13 +1,8 @@
 """Utilities for unified step logging and selective configuration summarisation.
 
-English only (project guideline). Provides small helpers to:
-    * Emit a consistent step prefix.
-    * Log only the *relevant* subset of the loaded configuration for a step.
-
-Historical note: A former helper ``log_consequences`` (protocol/symmetry rationale)
-has been superseded by the structured DecisionModel in ``infra.decisions`` and
-was removed to avoid divergent logic. Use the DecisionModel builders for any
-semantic / consequence logging going forward.
+These helpers emit a consistent step prefix and the relevant configuration
+fields for each step. Scientific decision and consequence logging uses the
+DecisionModel builders in ``infra.decisions``.
 
 These helpers are intentionally lightweight to avoid importing large config
 objects or causing circular dependencies.
