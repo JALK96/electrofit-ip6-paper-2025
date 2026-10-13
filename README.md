@@ -1,49 +1,49 @@
-# ElectroFit software and starting inputs
+# ElectroFit
 
-Reusable parameterization and analysis source, with IP6 starting inputs.
-The repository name is retained for now; it does not identify a published paper.
+ElectroFit derives partial charges for flexible molecules from a conformational
+ensemble. It samples conformers by MD, fits RESP charges to each conformer with
+Gaussian, averages them (optionally over symmetry-equivalent atoms) and sets up
+GROMACS simulations with the averaged charges. `ip6-analysis` analyses
+simulations of myo-inositol hexakisphosphate (IP6): ion coordination and
+distances, hydrogen bonds, charges and dihedrals.
 
-- `electrofit-workspace/packages/electrofit/`: parameterization implementation.
-- `electrofit-workspace/packages/ip6-analysis/`: analysis implementation.
-- `electrofit-workspace/{scripts,envs,docs,tests,data,examples}/`: supporting code,
-  environment definitions, documentation, tests and reusable input/example files.
-- `ip6-project/data/`: microstate inputs and MDP templates to copy into a fresh
-  study run. See [parameterization steps](ip6-project/README.md).
-- `notebooks/`: existing trajectory exploration notebook; its historical data
-  paths need selecting or repairing for each study. `traj_vis_env.yml` describes
-  its environment.
+## Contents
 
-Keep simulation outputs in the consuming study, outside this source checkout.
-Historical outputs and manuscripts remain in their original study/publication
-locations and are not part of this working tree.
+- `electrofit-workspace/packages/electrofit/`: the ElectroFit package and its
+  `electrofit` command ([README](electrofit-workspace/packages/electrofit/README.md)).
+- `electrofit-workspace/packages/ip6-analysis/`: the IP6 analysis package and its
+  `ip6-analysis` command ([README](electrofit-workspace/packages/ip6-analysis/README.md)).
+- `electrofit-workspace/data/`: force fields (`amber14sb.ff`,
+  `amber14sb_corrected-Na.ff`), MDP templates and example inputs.
+- `electrofit-workspace/examples/`: example projects.
+- `electrofit-workspace/tests/`: tests.
+- `electrofit-workspace/envs/`: conda environment definitions.
+- `ip6-project/data/`: inputs and MDP templates for the 11 IP6 protonation
+  microstates at pH 7.4 ([README](ip6-project/README.md)).
+- `notebooks/traj.ipynb`: trajectory visualisation; set the data paths in its
+  first cell. Its environment is defined in `traj_vis_env.yml`.
 
-## Working environment
+## Installation
+
+From `electrofit-workspace/`:
 
 ```bash
-source "$HOME/miniconda3/etc/profile.d/conda.sh"
-conda activate /home/johannal96/PhD/software/envs/electrofit-dev
+conda env create --prefix /path/to/env --file envs/electrofit-dev.lock.yml
+conda activate /path/to/env
+python -m pip install --no-deps -e ./packages/electrofit -e ./packages/ip6-analysis
 electrofit --help
 ip6-analysis --help
 ```
 
-This development environment uses editable packages from this checkout. The
-existing `electrofit-analysis` environment also uses these packages. The legacy
-`electrofit` environment uses only ElectroFit from this checkout. Source edits
-apply to subsequent commands in all environments using the edited package. Keep recorded production builds
-separate. Gaussian, AmberTools/ACPYPE and GROMACS compatibility must be checked
-for the intended host before running a full parameterization or MD workflow.
+Gaussian, AmberTools (antechamber, ACPYPE) and GROMACS are external programs.
+Check that the versions available on the host work with the workflow before a
+full parameterization or MD run.
 
-Dependency versions are recorded in
-`electrofit-workspace/envs/electrofit-dev.lock.yml`. To create a separate working
-environment, run from `electrofit-workspace/`:
+## Running
 
-```bash
-conda env create --prefix /path/to/new-env --file envs/electrofit-dev.lock.yml
-conda activate /path/to/new-env
-python -m pip install --no-deps -e ./packages/electrofit -e ./packages/ip6-analysis
-```
-
-The sparse checkout includes software, notebooks and starting inputs. Inspect
-its selection with `git sparse-checkout list`. Keep simulation outputs in the
-consuming study; `scripts/run/run_all_*.sh` accept `PROJECT` and `CACHE` overrides.
-Use `DRY_RUN=1` to inspect those command sequences.
+Each `electrofit` step takes a project directory (`--project`); see the
+[ElectroFit README](electrofit-workspace/packages/electrofit/README.md) for the
+steps and configuration. `electrofit-workspace/scripts/run/run_all_*.sh` run the
+steps for one molecule of the integration-test project; `PROJECT` and `CACHE`
+select another project and cache, and `DRY_RUN=1` prints the commands without
+running them.
