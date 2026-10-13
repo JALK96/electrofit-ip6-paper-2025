@@ -87,8 +87,6 @@ Fields are merged into nested dataclasses; unknown keys are ignored. Defaults sh
 - `checkpoint_minutes` (None): checkpoint interval of MD stages (`-cpt`); GROMACS writes one every 15 minutes by default. After a crash, `step8 --resume` continues from the last checkpoint.
 - `postprocess_on_scratch` (true): run trajectory centring, `mindist` and `gyrate` after production.
 
-On qcw46 (RTX 4060, GROMACS 2025.3), `gpu = true` with `threads = 8` ran the 13k-atom IP6/NaCl production system at about 500 ns/day (CPU only, 16 threads: 186 ns/day) and the 196k-atom system at 40 ns/day.
-
 ### [simulation.box]
 - `type` (`"dodecahedron"`): supports `dodecahedron` or `cubic` for automatic sizing.
 - `edge_nm` (1.2): padding distance when computing box size around solute.
@@ -137,7 +135,7 @@ Outputs PDBs under `process/<mol>/extracted_conforms/` and logs a sampling decis
 ## Notes on configuration resolution
 - Unknown keys are ignored (safe to keep project-level extras).
 - CLI flags always win over TOML.
-- Snapshot composition for per-run folders follows: upstream → molecule input → process cfg → project defaults → explicit override; existing snapshots are re-seeded on each run (clean behaviour).
+- Each step rewrites the run directory's `electrofit.toml`. It starts from the first existing file among the previous step's snapshot, `data/input/<mol>/electrofit.toml`, `process/<mol>/electrofit.toml` and the project `electrofit.toml`; applies `data/input/<mol>`, `process/<mol>` and `--config` as overrides, in that order; and adds keys missing from all of them from the project `electrofit.toml`. Edits made directly in a run directory's `electrofit.toml` are overwritten by the next step; put lasting changes in one of the source files or pass them with `--config`.
 
 ## Minimal API surface (Python)
 ```python
@@ -160,7 +158,7 @@ The public entrypoint `python -m electrofit` is equivalent to running the `elect
 - A production run interrupted this way leaves `md.cpt` in the run directory; after a crash or reboot the state stays in scratch. `electrofit step8 --resume` continues from either location (`mdrun -cpi`, appending to the existing outputs) and refuses when both hold a checkpoint. A new `step8` run refuses to start over a scratch directory that holds `md.cpt`.
 
 ## Safety and compatibility
-- Legacy `.ef` configs are no longer read; use TOML only.
+- Configuration is read from TOML files only; `.ef` files are not supported.
 - Deprecated key shim: `simulation.ions.concentration` is auto-mapped to `simulation.ions.salt_concentration` with a warning.
 - Symmetry defaults fall back to project-level booleans when `[symmetry]` is omitted.
 

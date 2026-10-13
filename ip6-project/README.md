@@ -1,8 +1,8 @@
 # IP6 project
 
-This directory is the project root for the IP6 microstate parameterization
-and analysis. It contains the inputs used for parameterization, the per‑
-microstate pipeline outputs and the post-processed/aggregated results.
+This directory holds the inputs for the IP6 microstate parameterization and
+analysis. Used as an ElectroFit project (`--project`), the pipeline writes the
+per-microstate outputs and results to `process/`.
 
 ## Top-level layout
 
@@ -20,8 +20,7 @@ project-specific notes.
 
 ## Per-microstate `process/<MICROSTATE>/` layout
 
-NOTE: If you are on github, you will not find any process directory. Since this is a output directory for molecular dynamics simulations, it is to big to be included in the repository.
-
+`process/` is created when the pipeline runs and is not part of the repository.
 Each microstate directory contains subfolders that reflect the
 pipeline steps and post-processing. Example structure for `process/IP_111101/`:
 
