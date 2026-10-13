@@ -9,6 +9,8 @@ microstate pipeline outputs and the post-processed/aggregated results.
 - `data/` — input materials and auxiliary files used by the pipeline:
   - `data/input/<MICROSTATE>/` — per-microstate input files (e.g. `<name>.mol2`,
     `<name>.pdb`, `electrofit.toml`, `equiv_groups.json`, `input.ef`).
+  - `data/input/ip6_microstates_pH7_4.tsv` — index of the 11 microstates at pH 7.4
+    with formal charge, residue name and source MOL2.
   - `data/MDP/` — model MDP templates used for GROMACS runs.
 - `process/` — per-microstate runtime outputs and results. Each microstate has
   its own directory (e.g. `process/IP_111101/`).
